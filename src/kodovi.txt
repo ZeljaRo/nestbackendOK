@@ -1,0 +1,402 @@
+﻿=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/maints ===
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './modules/app.module';
+
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.enableCors();
+  await app.listen(3005);
+  console.log('âś… Backend pokrenut na http://localhost:3005');
+}
+
+bootstrap();
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authcontrollerspects ===
+import { Test, TestingModule } from '@nestjs/testing';
+import { AuthController } from './auth.controller';
+
+describe('AuthController', () => {
+  let controller: AuthController;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [AuthController],
+    }).compile();
+
+    controller = module.get<AuthController>(AuthController);
+  });
+
+  it('should be defined', () => {
+    expect(controller).toBeDefined();
+  });
+});
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authcontrollerts ===
+import { Controller, Post, Body, Get, UseGuards, Request } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './jwt-auth.guard';
+import { CreateUserDto } from '../user/dto/create-user.dto';
+
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @Post('register')
+  async register(@Body() userData: CreateUserDto) {
+    return this.authService.register(userData);
+  }
+
+  @Post('login')
+  async login(@Body() userData: { email: string; password: string }) {
+    return this.authService.login(userData);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('profile')
+  async getProfile(@Request() req) {
+    return { message: 'Access granted!', user: req.user };
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authmodulets ===
+import { Module } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { UserModule } from '../user/user.module';
+import { JwtStrategy } from './jwt.strategy';
+
+@Module({
+  imports: [
+    UserModule,
+    PassportModule,
+    JwtModule.register({
+      secret: 'tajna_kljuc',
+      signOptions: { expiresIn: '1h' },
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, JwtStrategy],
+  exports: [AuthService, JwtModule],
+})
+export class AuthModule {}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authservicespects ===
+import { Test, TestingModule } from '@nestjs/testing';
+import { AuthService } from './auth.service';
+
+describe('AuthService', () => {
+  let service: AuthService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [AuthService],
+    }).compile();
+
+    service = module.get<AuthService>(AuthService);
+  });
+
+  it('should be defined', () => {
+    expect(service).toBeDefined();
+  });
+});
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authservicets ===
+import { Injectable, UnauthorizedException, InternalServerErrorException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcryptjs';
+import { UserService } from '../user/user.service';
+import { CreateUserDto } from '../user/dto/create-user.dto';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly userService: UserService,
+    private readonly jwtService: JwtService,
+  ) {}
+
+  async register(userData: CreateUserDto) {
+    const hashedPassword = await bcrypt.hash(userData.password, 10);
+    const user = await this.userService.create({
+      ...userData,
+      password: hashedPassword,
+    });
+
+    return {
+      message: 'User registered successfully',
+      user,
+    };
+  }
+
+  async login(userData: { email: string; password: string }) {
+    const user = await this.userService.findByEmail(userData.email);
+    if (!user || !(await bcrypt.compare(userData.password, user.password))) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const accessToken = this.jwtService.sign({ id: user.id, email: user.email });
+    return { accessToken };
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/jwt-authguardts ===
+import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+
+@Injectable()
+export class JwtAuthGuard implements CanActivate {
+  constructor(private readonly jwtService: JwtService) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const request = context.switchToHttp().getRequest();
+    const authHeader = request.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      throw new UnauthorizedException('Token nije poslan');
+    }
+
+    const token = authHeader.split(' ')[1];
+    try {
+      const decoded = this.jwtService.verify(token);
+      request.user = decoded;
+      return true;
+    } catch (error) {
+      throw new UnauthorizedException('Neispravan token');
+    }
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/jwtstrategyts ===
+import { Injectable } from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+import * as dotenv from 'dotenv';
+
+dotenv.config();
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor() {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ignoreExpiration: false,
+      secretOrKey: process.env.JWT_SECRET, // âś… Popravljeno - sada koristi .env
+    });
+  }
+
+  async validate(payload: any) {
+    return { userId: payload.sub, email: payload.email };
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/config/databaseconfigts ===
+import { DataSourceOptions } from 'typeorm';
+
+export const databaseConfig: DataSourceOptions = {
+  type: 'postgres',
+  host: 'localhost',
+  port: 5433,
+  username: 'nest_user',
+  password: 'lozinka123',
+  database: 'mydb',
+  entities: [__dirname + '/../**/*.entity.{ts,js}'],
+  synchronize: true,
+};
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/modules/appmodulets ===
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { databaseConfig } from '../config/database.config';  // âś… Provjereni put
+import { UserModule } from '../user/user.module';  // âś… Provjereni put
+import { AuthModule } from '../auth/auth.module';  // âś… Provjereni put
+
+@Module({
+  imports: [
+    TypeOrmModule.forRoot(databaseConfig),
+    UserModule,
+    AuthModule,
+  ],
+})
+export class AppModule {}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/usercontrollerts ===
+// Uvozimo potrebne dekoratore iz NestJS-a za definiranje ruta i upravljanje HTTP zahtjevima
+import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common';
+
+// Uvozimo servis koji sadrĹľi logiku vezanu uz korisnike
+import { UserService } from './user.service';
+
+// Definiramo ovaj kontroler s prefiksom 'users' â†’ sve rute poÄŤinju s /users
+@Controller('users')
+export class UserController {
+  // Injektiramo UserService pomoÄ‡u konstruktora â€“ Nest automatski dodjeljuje instancu
+  constructor(private readonly userService: UserService) {}
+
+  // Ruta: GET /users
+  // VraÄ‡a sve korisnike iz baze
+  @Get()
+  async findAll() {
+    return this.userService.findAll();
+  }
+
+  // Ruta: GET /users/:id
+  // DohvaÄ‡a jednog korisnika na temelju ID-a iz URL-a
+  @Get(':id')
+  async findById(
+    // Uzima parametar `id` iz URL-a i pretvara ga u broj pomoÄ‡u ParseIntPipe
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.userService.findById(id);
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/userentityts ===
+import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+
+@Entity()
+export class User {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column({ unique: true })
+  email: string;
+
+  @Column()
+  password: string;
+
+  @Column({ type: 'text', nullable: true }) // OmoguÄ‡ujemo null vrijednost
+refreshToken: string | null;
+
+}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/usermodulets ===
+// Importiramo @Module dekorator koji definira da je ovo NestJS modul
+import { Module } from '@nestjs/common';
+
+// Importiramo TypeOrmModule kako bismo mogli koristiti repozitorij za User entitet
+import { TypeOrmModule } from '@nestjs/typeorm';
+
+// Importiramo servis koji sadrĹľi poslovnu logiku korisnika
+import { UserService } from './user.service';
+
+// Importiramo kontroler koji obraÄ‘uje HTTP zahtjeve za korisnike
+import { UserController } from './user.controller';
+
+// Importiramo entitet korisnika (predstavlja tablicu u bazi)
+import { User } from './user.entity';
+
+// Deklariramo modul pomoÄ‡u @Module dekoratora
+@Module({
+  // imports sluĹľi za povezivanje s bazom pomoÄ‡u TypeORM repozitorija za entitet User
+  imports: [TypeOrmModule.forFeature([User])],
+
+  // controllers definira koji kontroleri su dio ovog modula (tu dolaze HTTP rute)
+  controllers: [UserController],
+
+  // providers oznaÄŤava koji servisi su dostupni unutar modula
+  providers: [UserService],
+
+  // exports omoguÄ‡uje da druge module mogu koristiti ovaj servis (npr. auth modul)
+  exports: [UserService],
+})
+export class UserModule {}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/userservicets ===
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { User } from './user.entity';
+
+@Injectable()
+export class UserService {
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+  ) {}
+
+  async create(data: Partial<User>): Promise<User> {
+    const user = this.userRepository.create(data);
+    return this.userRepository.save(user);
+  }
+
+  async findByEmail(email: string): Promise<User | null> {
+    return this.userRepository.findOne({ where: { email } });
+  }
+
+  async findById(id: number): Promise<User | null> {
+    return this.userRepository.findOne({ where: { id } });
+  }
+
+  async findAll(): Promise<User[]> {
+    return this.userRepository.find();
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/dto/create-userdtots ===
+// Uvozimo dekoratore za validaciju iz biblioteke 'class-validator'
+import { IsEmail, IsNotEmpty, MinLength } from 'class-validator';
+
+// Definiramo DTO (Data Transfer Object) klasu za kreiranje novog korisnika
+export class CreateUserDto {
+  // Provjera da je email ispravno napisan (npr. test@mail.com)
+  @IsEmail()
+  email: string;
+
+  // Provjera da polje nije prazno (ne smije biti undefined, null ili prazan string)
+  @IsNotEmpty()
+  // Lozinka mora imati minimalnu duljinu od 6 znakova
+  @MinLength(6)
+  password: string;
+}
+
+
+
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/dto/update-userdtots ===
+// Uvozimo validacijske dekoratore
+import { IsEmail, IsOptional, MinLength } from 'class-validator';
+
+// DTO klasa za aĹľuriranje korisnika â€“ sva polja su opcionalna jer se moĹľda mijenja samo jedno
+export class UpdateUserDto {
+  // Ako se Ĺˇalje novi email â€“ mora biti ispravno napisan
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  // Ako se Ĺˇalje nova lozinka â€“ mora imati barem 6 znakova
+  @IsOptional()
+  @MinLength(6)
+  password?: string;
+}
+
+
+
