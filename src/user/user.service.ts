@@ -24,6 +24,10 @@ export class UserService {
   ) {}
 
   async create(data: Partial<User>): Promise<User> {
+    // Brisanje keša jer dodajemo novog korisnika
+    await this.cacheManager.del('all_users');
+    console.log('🧹 Obrisan cache: all_users');
+
     const user = this.userRepository.create(data);
     return this.userRepository.save(user);
   }
@@ -37,20 +41,15 @@ export class UserService {
   }
 
   async findAll(): Promise<User[]> {
-    // Logiramo poziv metode – da vidimo radi li uopće
     console.log('🔍 Pozvana je metoda findAll()');
 
-    // Provjera postoji li već keširan rezultat
     const cached = await this.cacheManager.get<User[]>('all_users');
     if (cached) {
       console.log('✅ Vraćeno iz cache-a');
       return cached;
     }
 
-    // Ako nema u cache-u, dohvaćamo iz baze
     const users = await this.userRepository.find();
-
-    // Spremamo rezultat u cache na 60 sekundi
     await this.cacheManager.set('all_users', users, 60_000);
 
     console.log('✅ Vraćeno iz baze i spremljeno u cache');
