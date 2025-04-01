@@ -7,13 +7,14 @@ import { UserService } from './user.service';
 // Definiramo ovaj kontroler s prefiksom 'users' → sve rute počinju s /users
 @Controller('users')
 export class UserController {
-  // Injektiramo UserService pomoću konstruktora – Nest automatski dodjeljuje instancu
+  // Injektiramo UserService putem konstruktora
   constructor(private readonly userService: UserService) {}
 
   // Ruta: GET /users
   // Vraća sve korisnike iz baze
   @Get()
   async findAll() {
+    console.log('📡 Poziv iz kontrolera je stigao do findAll()');
     return this.userService.findAll();
   }
 

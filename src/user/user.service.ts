@@ -1,13 +1,26 @@
-import { Injectable } from '@nestjs/common';
+// Uvoz osnovnih NestJS alata
+import { Injectable, Inject } from '@nestjs/common';
+
+// TypeORM alati za povezivanje s bazom
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+
+// Naš entitet korisnika
 import { User } from './user.entity';
+
+// Uvoz za cache manager iz NestJS i odgovarajućeg tipa
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+
+    // Ubrizgavamo cache manager koji će upravljati Redis keširanjem
+    @Inject(CACHE_MANAGER)
+    private cacheManager: Cache,
   ) {}
 
   async create(data: Partial<User>): Promise<User> {
@@ -24,6 +37,23 @@ export class UserService {
   }
 
   async findAll(): Promise<User[]> {
-    return this.userRepository.find();
+    // Logiramo poziv metode – da vidimo radi li uopće
+    console.log('🔍 Pozvana je metoda findAll()');
+
+    // Provjera postoji li već keširan rezultat
+    const cached = await this.cacheManager.get<User[]>('all_users');
+    if (cached) {
+      console.log('✅ Vraćeno iz cache-a');
+      return cached;
+    }
+
+    // Ako nema u cache-u, dohvaćamo iz baze
+    const users = await this.userRepository.find();
+
+    // Spremamo rezultat u cache na 60 sekundi
+    await this.cacheManager.set('all_users', users, 60_000);
+
+    console.log('✅ Vraćeno iz baze i spremljeno u cache');
+    return users;
   }
 }
