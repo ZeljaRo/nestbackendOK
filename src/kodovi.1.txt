@@ -1,4 +1,4 @@
-﻿=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/maints ===
+﻿=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/maints ===
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './modules/app.module';
 
@@ -14,7 +14,7 @@ bootstrap();
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authcontrollerspects ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authcontrollerspects ===
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthController } from './auth.controller';
 
@@ -36,7 +36,7 @@ describe('AuthController', () => {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authcontrollerts ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authcontrollerts ===
 import { Controller, Post, Body, Get, UseGuards, Request } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -56,7 +56,7 @@ export class AuthController {
     return this.authService.login(userData);
   }
 
-  @UseGuards(JwtAuthGuard)  // âś… OVO OSIGURAVA AUTORIZACIJU!
+  @UseGuards(JwtAuthGuard)
   @Get('profile')
   async getProfile(@Request() req) {
     return { message: 'Access granted!', user: req.user };
@@ -65,7 +65,7 @@ export class AuthController {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authmodulets ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authmodulets ===
 import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
@@ -79,7 +79,7 @@ import { JwtStrategy } from './jwt.strategy';
     UserModule,
     PassportModule,
     JwtModule.register({
-      secret: 'moj_tajni_kljuc', // âś… Ovdje definiramo kljuÄŤ bez .env
+      secret: 'tajna_kljuc',
       signOptions: { expiresIn: '1h' },
     }),
   ],
@@ -91,7 +91,7 @@ export class AuthModule {}
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authservicespects ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authservicespects ===
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from './auth.service';
 
@@ -113,7 +113,7 @@ describe('AuthService', () => {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authservicets ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/authservicets ===
 import { Injectable, UnauthorizedException, InternalServerErrorException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
@@ -153,7 +153,7 @@ export class AuthService {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/jwt-authguardts ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/jwt-authguardts ===
 import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
@@ -182,10 +182,13 @@ export class JwtAuthGuard implements CanActivate {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/jwtstrategyts ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/auth/jwtstrategyts ===
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import * as dotenv from 'dotenv';
+
+dotenv.config();
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -193,18 +196,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: 'moj_tajni_kljuc',  // âś… KLJUÄŚ JE DEFINIRAN OVDJE
+      secretOrKey: process.env.JWT_SECRET, // âś… Popravljeno - sada koristi .env
     });
   }
 
   async validate(payload: any) {
-    return { id: payload.id, email: payload.email };  // âś… OSIGURAVAMO ISPRAVAN FORMAT!
+    return { userId: payload.sub, email: payload.email };
   }
 }
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/config/databaseconfigts ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/config/databaseconfigts ===
 import { DataSourceOptions } from 'typeorm';
 
 export const databaseConfig: DataSourceOptions = {
@@ -220,12 +223,12 @@ export const databaseConfig: DataSourceOptions = {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/modules/appmodulets ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/modules/appmodulets ===
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { databaseConfig } from '../config/database.config';  // âś… TaÄŤna putanja za config/
-import { UserModule } from '../user/user.module';  // âś… TaÄŤna putanja za user/
-import { AuthModule } from '../auth/auth.module';  // âś… TaÄŤna putanja za auth/
+import { databaseConfig } from '../config/database.config';  // âś… Provjereni put
+import { UserModule } from '../user/user.module';  // âś… Provjereni put
+import { AuthModule } from '../auth/auth.module';  // âś… Provjereni put
 
 @Module({
   imports: [
@@ -238,7 +241,7 @@ export class AppModule {}
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/usercontrollerts ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/usercontrollerts ===
 // Uvozimo potrebne dekoratore iz NestJS-a za definiranje ruta i upravljanje HTTP zahtjevima
 import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common';
 
@@ -271,7 +274,7 @@ export class UserController {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/userentityts ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/userentityts ===
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
@@ -292,7 +295,7 @@ refreshToken: string | null;
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/usermodulets ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/usermodulets ===
 // Importiramo @Module dekorator koji definira da je ovo NestJS modul
 import { Module } from '@nestjs/common';
 
@@ -326,7 +329,7 @@ export class UserModule {}
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/userservicets ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/userservicets ===
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -359,7 +362,7 @@ export class UserService {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/dto/create-userdtots ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/dto/create-userdtots ===
 // Uvozimo dekoratore za validaciju iz biblioteke 'class-validator'
 import { IsEmail, IsNotEmpty, MinLength } from 'class-validator';
 
@@ -378,7 +381,7 @@ export class CreateUserDto {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/dto/update-userdtots ===
+=== C:/Users/Korisnik/Documents/projekti/nestangular2/back/src/user/dto/update-userdtots ===
 // Uvozimo validacijske dekoratore
 import { IsEmail, IsOptional, MinLength } from 'class-validator';
 
