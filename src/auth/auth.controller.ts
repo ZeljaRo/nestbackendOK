@@ -1,4 +1,12 @@
-import { Controller, Post, Body, Get, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  UseGuards,
+  Request,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { CreateUserDto } from '../user/dto/create-user.dto';
@@ -17,7 +25,20 @@ export class AuthController {
     return this.authService.login(userData);
   }
 
-  @UseGuards(JwtAuthGuard)  // ✅ OVO OSIGURAVA AUTORIZACIJU!
+  @Post('refresh')
+  async refresh(@Body() body: { userId: number; refreshToken: string }) {
+    const { userId, refreshToken } = body;
+
+    const isValid = await this.authService.validateRefreshToken(userId, refreshToken);
+    if (!isValid) {
+      throw new UnauthorizedException('Neispravan ili istekao refresh token');
+    }
+
+    const newAccessToken = await this.authService.generateAccessToken(userId);
+    return { accessToken: newAccessToken };
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('profile')
   async getProfile(@Request() req) {
     return { message: 'Access granted!', user: req.user };
