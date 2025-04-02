@@ -1,14 +1,8 @@
-// Uvoz osnovnih NestJS alata
 import { Injectable, Inject } from '@nestjs/common';
-
-// TypeORM alati za povezivanje s bazom
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-
-// Naš entitet korisnika
 import { User } from './user.entity';
 
-// Uvoz za cache manager iz NestJS i odgovarajućeg tipa
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 
@@ -18,15 +12,17 @@ export class UserService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
 
-    // Ubrizgavamo cache manager koji će upravljati Redis keširanjem
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
   ) {}
 
   async create(data: Partial<User>): Promise<User> {
-    // Brisanje keša jer dodajemo novog korisnika
-    await this.cacheManager.del('all_users');
-    console.log('🧹 Obrisan cache: all_users');
+    try {
+      await this.cacheManager.del('all_users');
+      console.log('🧹 Obrisan cache: all_users');
+    } catch (error) {
+      console.error('⚠️ Greška prilikom brisanja cache-a:', error.message);
+    }
 
     const user = this.userRepository.create(data);
     return this.userRepository.save(user);

@@ -23,16 +23,26 @@ export class AuthService {
   ) {}
 
   async register(userData: CreateUserDto) {
-    const hashedPassword = await bcrypt.hash(userData.password, 10);
-    const user = await this.userService.create({
-      ...userData,
-      password: hashedPassword,
-    });
+    try {
+      const hashedPassword = await bcrypt.hash(userData.password, 10);
+      const user = await this.userService.create({
+        ...userData,
+        password: hashedPassword,
+      });
 
-    return {
-      message: 'User registered successfully',
-      user,
-    };
+      return {
+        message: 'User registered successfully',
+        user,
+      };
+    } catch (error) {
+      if (error.code === '23505') {
+        // Email već postoji
+        throw new UnauthorizedException('Korisnik s ovim emailom već postoji');
+      }
+
+      console.error('❌ Greška pri registraciji:', error.message);
+      throw new InternalServerErrorException('Registracija nije uspjela');
+    }
   }
 
   async login(userData: { email: string; password: string }) {
