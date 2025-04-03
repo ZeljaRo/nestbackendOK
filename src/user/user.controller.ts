@@ -1,30 +1,23 @@
-// Uvozimo potrebne dekoratore iz NestJS-a za definiranje ruta i upravljanje HTTP zahtjevima
-import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common';
-
-// Uvozimo servis koji sadrži logiku vezanu uz korisnike
+import { Controller, Get, Param, UseGuards } from '@nestjs/common';
 import { UserService } from './user.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
-// Definiramo ovaj kontroler s prefiksom 'users' → sve rute počinju s /users
 @Controller('users')
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class UserController {
-  // Injektiramo UserService putem konstruktora
   constructor(private readonly userService: UserService) {}
 
-  // Ruta: GET /users
-  // Vraća sve korisnike iz baze
+  @Roles('admin')
   @Get()
-  async findAll() {
-    console.log('📡 Poziv iz kontrolera je stigao do findAll()');
+  findAll() {
     return this.userService.findAll();
   }
 
-  // Ruta: GET /users/:id
-  // Dohvaća jednog korisnika na temelju ID-a iz URL-a
+  @Roles('admin')
   @Get(':id')
-  async findById(
-    // Uzima parametar `id` iz URL-a i pretvara ga u broj pomoću ParseIntPipe
-    @Param('id', ParseIntPipe) id: number,
-  ) {
-    return this.userService.findById(id);
+  findById(@Param('id') id: number) {
+    return this.userService.findById(Number(id));
   }
 }

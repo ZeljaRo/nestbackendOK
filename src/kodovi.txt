@@ -1,4 +1,4 @@
-﻿=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/maints ===
+﻿=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/maints ===
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './modules/app.module';
 
@@ -14,7 +14,7 @@ bootstrap();
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authcontrollerspects ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/authcontrollerspects ===
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthController } from './auth.controller';
 
@@ -36,8 +36,16 @@ describe('AuthController', () => {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authcontrollerts ===
-import { Controller, Post, Body, Get, UseGuards, Request } from '@nestjs/common';
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/authcontrollerts ===
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  UseGuards,
+  Request,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { CreateUserDto } from '../user/dto/create-user.dto';
@@ -56,7 +64,20 @@ export class AuthController {
     return this.authService.login(userData);
   }
 
-  @UseGuards(JwtAuthGuard)  // âś… OVO OSIGURAVA AUTORIZACIJU!
+  @Post('refresh')
+  async refresh(@Body() body: { userId: number; refreshToken: string }) {
+    const { userId, refreshToken } = body;
+
+    const isValid = await this.authService.validateRefreshToken(userId, refreshToken);
+    if (!isValid) {
+      throw new UnauthorizedException('Neispravan ili istekao refresh token');
+    }
+
+    const newAccessToken = await this.authService.generateAccessToken(userId);
+    return { accessToken: newAccessToken };
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('profile')
   async getProfile(@Request() req) {
     return { message: 'Access granted!', user: req.user };
@@ -65,7 +86,7 @@ export class AuthController {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authmodulets ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/authmodulets ===
 import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
@@ -91,7 +112,7 @@ export class AuthModule {}
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authservicespects ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/authservicespects ===
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from './auth.service';
 
@@ -113,31 +134,52 @@ describe('AuthService', () => {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/authservicets ===
-import { Injectable, UnauthorizedException, InternalServerErrorException } from '@nestjs/common';
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/authservicets ===
+import {
+  Injectable,
+  UnauthorizedException,
+  InternalServerErrorException,
+  Inject,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { UserService } from '../user/user.service';
 import { CreateUserDto } from '../user/dto/create-user.dto';
+
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly userService: UserService,
     private readonly jwtService: JwtService,
+
+    @Inject(CACHE_MANAGER)
+    private cacheManager: Cache,
   ) {}
 
   async register(userData: CreateUserDto) {
-    const hashedPassword = await bcrypt.hash(userData.password, 10);
-    const user = await this.userService.create({
-      ...userData,
-      password: hashedPassword,
-    });
+    try {
+      const hashedPassword = await bcrypt.hash(userData.password, 10);
+      const user = await this.userService.create({
+        ...userData,
+        password: hashedPassword,
+      });
 
-    return {
-      message: 'User registered successfully',
-      user,
-    };
+      return {
+        message: 'User registered successfully',
+        user,
+      };
+    } catch (error) {
+      if (error.code === '23505') {
+        // Email veÄ‡ postoji
+        throw new UnauthorizedException('Korisnik s ovim emailom veÄ‡ postoji');
+      }
+
+      console.error('âťŚ GreĹˇka pri registraciji:', error.message);
+      throw new InternalServerErrorException('Registracija nije uspjela');
+    }
   }
 
   async login(userData: { email: string; password: string }) {
@@ -146,14 +188,47 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const accessToken = this.jwtService.sign({ id: user.id, email: user.email });
-    return { accessToken };
+    const tokens = await this.generateTokens(user.id, user.email);
+
+    await this.cacheManager.set(
+      `user_${user.id}_refresh`,
+      tokens.refreshToken,
+      7 * 24 * 60 * 60 * 1000,
+    );
+
+    return tokens;
+  }
+
+  async generateTokens(userId: number, email: string) {
+    const payload = { id: userId, email };
+
+    const accessToken = this.jwtService.sign(payload, {
+      expiresIn: '1h',
+    });
+
+    const refreshToken = this.jwtService.sign(payload, {
+      expiresIn: '7d',
+    });
+
+    return { accessToken, refreshToken };
+  }
+
+  async validateRefreshToken(userId: number, token: string): Promise<boolean> {
+    const storedToken = await this.cacheManager.get<string>(`user_${userId}_refresh`);
+    return storedToken === token;
+  }
+
+  async generateAccessToken(userId: number): Promise<string> {
+    const user = await this.userService.findById(userId);
+    if (!user) throw new UnauthorizedException('Korisnik ne postoji');
+
+    return this.jwtService.sign({ id: user.id, email: user.email }, { expiresIn: '1h' });
   }
 }
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/jwt-authguardts ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/jwt-authguardts ===
 import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
@@ -182,7 +257,7 @@ export class JwtAuthGuard implements CanActivate {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/auth/jwtstrategyts ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/jwtstrategyts ===
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
@@ -204,7 +279,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/config/databaseconfigts ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/config/databaseconfigts ===
 import { DataSourceOptions } from 'typeorm';
 
 export const databaseConfig: DataSourceOptions = {
@@ -220,16 +295,54 @@ export const databaseConfig: DataSourceOptions = {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/modules/appmodulets ===
-import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { databaseConfig } from '../config/database.config';  // âś… TaÄŤna putanja za config/
-import { UserModule } from '../user/user.module';  // âś… TaÄŤna putanja za user/
-import { AuthModule } from '../auth/auth.module';  // âś… TaÄŤna putanja za auth/
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/config/redisconfigts ===
+// Importiramo registerAs za definiranje konfiguracije
+import { registerAs } from '@nestjs/config';
 
+// Exportiramo konfiguraciju kao funkciju pod imenom 'redis'
+export default registerAs('redis', () => ({
+  host: 'localhost',  // Redis server na lokalnom stroju
+  port: 6379,          // Standardni port za Redis
+}));
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/modules/appmodulets ===
+// Uvozimo osnovne NestJS module
+import { Module } from '@nestjs/common';
+
+// Uvozimo TypeORM i naĹˇu konfiguraciju baze
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { databaseConfig } from '../config/database.config';
+
+// Uvozimo naĹˇa dva modula
+import { UserModule } from '../user/user.module';
+import { AuthModule } from '../auth/auth.module';
+
+// Uvozimo CacheModule i registraciju za Redis cache
+import { CacheModule } from '@nestjs/cache-manager';
+import { redisStore } from 'cache-manager-ioredis-yet';
+
+// Deklariramo AppModule
 @Module({
   imports: [
+    // Povezivanje s PostgreSQL bazom
     TypeOrmModule.forRoot(databaseConfig),
+
+    // Konfiguracija Redis cache-a
+    CacheModule.registerAsync({
+      useFactory: async () => ({
+        store: await redisStore({
+          socket: {
+            host: 'localhost',
+            port: 6379,
+          },
+        }),
+      }),
+      isGlobal: true,  // Cache dostupna globalno u cijeloj aplikaciji
+    }),
+
+    // UkljuÄŤivanje ostalih modula
     UserModule,
     AuthModule,
   ],
@@ -238,7 +351,7 @@ export class AppModule {}
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/usercontrollerts ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/usercontrollerts ===
 // Uvozimo potrebne dekoratore iz NestJS-a za definiranje ruta i upravljanje HTTP zahtjevima
 import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common';
 
@@ -248,13 +361,14 @@ import { UserService } from './user.service';
 // Definiramo ovaj kontroler s prefiksom 'users' â†’ sve rute poÄŤinju s /users
 @Controller('users')
 export class UserController {
-  // Injektiramo UserService pomoÄ‡u konstruktora â€“ Nest automatski dodjeljuje instancu
+  // Injektiramo UserService putem konstruktora
   constructor(private readonly userService: UserService) {}
 
   // Ruta: GET /users
   // VraÄ‡a sve korisnike iz baze
   @Get()
   async findAll() {
+    console.log('đź“ˇ Poziv iz kontrolera je stigao do findAll()');
     return this.userService.findAll();
   }
 
@@ -271,7 +385,7 @@ export class UserController {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/userentityts ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/userentityts ===
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
@@ -292,7 +406,7 @@ refreshToken: string | null;
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/usermodulets ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/usermodulets ===
 // Importiramo @Module dekorator koji definira da je ovo NestJS modul
 import { Module } from '@nestjs/common';
 
@@ -326,20 +440,33 @@ export class UserModule {}
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/userservicets ===
-import { Injectable } from '@nestjs/common';
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/userservicets ===
+import { Injectable, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './user.entity';
+
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+
+    @Inject(CACHE_MANAGER)
+    private cacheManager: Cache,
   ) {}
 
   async create(data: Partial<User>): Promise<User> {
+    try {
+      await this.cacheManager.del('all_users');
+      console.log('đź§ą Obrisan cache: all_users');
+    } catch (error) {
+      console.error('âš ď¸Ź GreĹˇka prilikom brisanja cache-a:', error.message);
+    }
+
     const user = this.userRepository.create(data);
     return this.userRepository.save(user);
   }
@@ -353,13 +480,25 @@ export class UserService {
   }
 
   async findAll(): Promise<User[]> {
-    return this.userRepository.find();
+    console.log('đź”Ť Pozvana je metoda findAll()');
+
+    const cached = await this.cacheManager.get<User[]>('all_users');
+    if (cached) {
+      console.log('âś… VraÄ‡eno iz cache-a');
+      return cached;
+    }
+
+    const users = await this.userRepository.find();
+    await this.cacheManager.set('all_users', users, 60_000);
+
+    console.log('âś… VraÄ‡eno iz baze i spremljeno u cache');
+    return users;
   }
 }
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/dto/create-userdtots ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/dto/create-userdtots ===
 // Uvozimo dekoratore za validaciju iz biblioteke 'class-validator'
 import { IsEmail, IsNotEmpty, MinLength } from 'class-validator';
 
@@ -378,7 +517,7 @@ export class CreateUserDto {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestangular2/back/src/user/dto/update-userdtots ===
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/dto/update-userdtots ===
 // Uvozimo validacijske dekoratore
 import { IsEmail, IsOptional, MinLength } from 'class-validator';
 
