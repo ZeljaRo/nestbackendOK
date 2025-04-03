@@ -39,4 +39,9 @@ export class AuthController {
       message: '✅ Dobrodošao, admin!',
     };
   }
+
+  @Post('refresh')
+  refresh(@Body() body: { userId: number; refreshToken: string }) {
+    return this.authService.refreshTokens(body.userId, body.refreshToken);
+  }
 }

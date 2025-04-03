@@ -41,46 +41,47 @@ import {
   Controller,
   Post,
   Body,
-  Get,
   UseGuards,
+  Get,
   Request,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
-import { CreateUserDto } from '../user/dto/create-user.dto';
+import { Roles } from './roles.decorator';
+import { RolesGuard } from './roles.guard';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  async register(@Body() userData: CreateUserDto) {
-    return this.authService.register(userData);
+  register(@Body() body: { email: string; password: string }) {
+    return this.authService.register(body);
   }
 
   @Post('login')
-  async login(@Body() userData: { email: string; password: string }) {
-    return this.authService.login(userData);
-  }
-
-  @Post('refresh')
-  async refresh(@Body() body: { userId: number; refreshToken: string }) {
-    const { userId, refreshToken } = body;
-
-    const isValid = await this.authService.validateRefreshToken(userId, refreshToken);
-    if (!isValid) {
-      throw new UnauthorizedException('Neispravan ili istekao refresh token');
-    }
-
-    const newAccessToken = await this.authService.generateAccessToken(userId);
-    return { accessToken: newAccessToken };
+  login(@Body() body: { email: string; password: string }) {
+    return this.authService.login(body);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('profile')
-  async getProfile(@Request() req) {
-    return { message: 'Access granted!', user: req.user };
+  getProfile(@Request() req) {
+    return req.user;
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Get('test-admin')
+  testAdmin() {
+    return {
+      message: 'âś… DobrodoĹˇao, admin!',
+    };
+  }
+
+  @Post('refresh')
+  refresh(@Body() body: { userId: number; refreshToken: string }) {
+    return this.authService.refreshTokens(body.userId, body.refreshToken);
   }
 }
 
@@ -138,91 +139,87 @@ describe('AuthService', () => {
 import {
   Injectable,
   UnauthorizedException,
-  InternalServerErrorException,
-  Inject,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcryptjs';
+import * as bcrypt from 'bcrypt';
 import { UserService } from '../user/user.service';
-import { CreateUserDto } from '../user/dto/create-user.dto';
-
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
 
 @Injectable()
 export class AuthService {
   constructor(
-    private readonly userService: UserService,
-    private readonly jwtService: JwtService,
-
-    @Inject(CACHE_MANAGER)
-    private cacheManager: Cache,
+    private userService: UserService,
+    private jwtService: JwtService,
   ) {}
 
-  async register(userData: CreateUserDto) {
-    try {
-      const hashedPassword = await bcrypt.hash(userData.password, 10);
-      const user = await this.userService.create({
-        ...userData,
-        password: hashedPassword,
-      });
+  async register(body: { email: string; password: string }) {
+    const hashedPassword = await bcrypt.hash(body.password, 10);
+    const user = await this.userService.create({
+      ...body,
+      password: hashedPassword,
+      role: 'admin',
+    });
 
-      return {
-        message: 'User registered successfully',
-        user,
-      };
-    } catch (error) {
-      if (error.code === '23505') {
-        // Email veÄ‡ postoji
-        throw new UnauthorizedException('Korisnik s ovim emailom veÄ‡ postoji');
-      }
-
-      console.error('âťŚ GreĹˇka pri registraciji:', error.message);
-      throw new InternalServerErrorException('Registracija nije uspjela');
-    }
+    return {
+      message: 'User registered successfully',
+      user: {
+        id: user.id,
+        email: user.email,
+        password: user.password,
+        refreshToken: user.refreshToken,
+        role: user.role,
+      },
+    };
   }
 
-  async login(userData: { email: string; password: string }) {
-    const user = await this.userService.findByEmail(userData.email);
-    if (!user || !(await bcrypt.compare(userData.password, user.password))) {
+  async login(body: { email: string; password: string }) {
+    const user = await this.userService.findByEmail(body.email);
+    if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const tokens = await this.generateTokens(user.id, user.email);
-
-    await this.cacheManager.set(
-      `user_${user.id}_refresh`,
-      tokens.refreshToken,
-      7 * 24 * 60 * 60 * 1000,
+    const isPasswordValid = await bcrypt.compare(
+      body.password,
+      user.password,
     );
 
-    return tokens;
-  }
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
-  async generateTokens(userId: number, email: string) {
-    const payload = { id: userId, email };
-
-    const accessToken = this.jwtService.sign(payload, {
-      expiresIn: '1h',
+    const accessToken = this.jwtService.sign({
+      id: user.id,
+      email: user.email,
+      role: user.role,
     });
 
-    const refreshToken = this.jwtService.sign(payload, {
-      expiresIn: '7d',
-    });
+    const refreshToken = this.jwtService.sign(
+      {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+      },
+      { expiresIn: '7d' },
+    );
+
+    await this.userService.updateRefreshToken(user.id, refreshToken);
 
     return { accessToken, refreshToken };
   }
 
-  async validateRefreshToken(userId: number, token: string): Promise<boolean> {
-    const storedToken = await this.cacheManager.get<string>(`user_${userId}_refresh`);
-    return storedToken === token;
-  }
-
-  async generateAccessToken(userId: number): Promise<string> {
+  async refreshTokens(userId: number, refreshToken: string) {
     const user = await this.userService.findById(userId);
-    if (!user) throw new UnauthorizedException('Korisnik ne postoji');
 
-    return this.jwtService.sign({ id: user.id, email: user.email }, { expiresIn: '1h' });
+    if (!user || user.refreshToken !== refreshToken) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const newAccessToken = this.jwtService.sign({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    });
+
+    return { accessToken: newAccessToken };
   }
 }
 
@@ -261,6 +258,11 @@ export class JwtAuthGuard implements CanActivate {
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+export interface JwtPayload {
+  id: number;
+  email: string;
+  role: string;
+}
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -277,6 +279,56 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 }
 
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/rolesdecoratorts ===
+import { SetMetadata } from '@nestjs/common';
+
+// đź” KljuÄŤ koji Ä‡emo kasnije koristiti u guardu
+export const ROLES_KEY = 'roles';
+
+/**
+ * @Roles('admin') â†’ koristi se u kontroleru
+ * Postavlja metapodatke koje role imaju pristup ruti
+ */
+export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/rolesguardts ===
+import {
+    Injectable,
+    CanActivate,
+    ExecutionContext,
+  } from '@nestjs/common';
+  import { Reflector } from '@nestjs/core';
+  import { ROLES_KEY } from './roles.decorator';
+  import { JwtPayload } from './jwt.strategy';
+  
+  @Injectable()
+  export class RolesGuard implements CanActivate {
+    constructor(private reflector: Reflector) {}
+  
+    canActivate(context: ExecutionContext): boolean {
+      // đź“Ś DohvaÄ‡amo dozvoljene role s route pomoÄ‡u metapodataka
+      const requiredRoles = this.reflector.getAllAndOverride<string[]>(
+        ROLES_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+  
+      // đź“Ś Ako ruta nema definirane role, svi imaju pristup
+      if (!requiredRoles) {
+        return true;
+      }
+  
+      const request = context.switchToHttp().getRequest();
+      const user: JwtPayload = request.user;
+  
+      // đź“Ś Provjera je li korisnikova rola meÄ‘u dozvoljenima
+      return requiredRoles.includes(user.role);
+    }
+  }
+  
 
 
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/config/databaseconfigts ===
@@ -352,34 +404,27 @@ export class AppModule {}
 
 
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/usercontrollerts ===
-// Uvozimo potrebne dekoratore iz NestJS-a za definiranje ruta i upravljanje HTTP zahtjevima
-import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common';
-
-// Uvozimo servis koji sadrĹľi logiku vezanu uz korisnike
+import { Controller, Get, Param, UseGuards } from '@nestjs/common';
 import { UserService } from './user.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
-// Definiramo ovaj kontroler s prefiksom 'users' â†’ sve rute poÄŤinju s /users
 @Controller('users')
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class UserController {
-  // Injektiramo UserService putem konstruktora
   constructor(private readonly userService: UserService) {}
 
-  // Ruta: GET /users
-  // VraÄ‡a sve korisnike iz baze
+  @Roles('admin')
   @Get()
-  async findAll() {
-    console.log('đź“ˇ Poziv iz kontrolera je stigao do findAll()');
+  findAll() {
     return this.userService.findAll();
   }
 
-  // Ruta: GET /users/:id
-  // DohvaÄ‡a jednog korisnika na temelju ID-a iz URL-a
+  @Roles('admin')
   @Get(':id')
-  async findById(
-    // Uzima parametar `id` iz URL-a i pretvara ga u broj pomoÄ‡u ParseIntPipe
-    @Param('id', ParseIntPipe) id: number,
-  ) {
-    return this.userService.findById(id);
+  findById(@Param('id') id: number) {
+    return this.userService.findById(Number(id));
   }
 }
 
@@ -400,8 +445,10 @@ export class User {
   password: string;
 
   @Column({ type: 'text', nullable: true }) // OmoguÄ‡ujemo null vrijednost
-refreshToken: string | null;
+  refreshToken: string | null;
 
+  @Column()
+  role: string; // âś… Dodano polje koje fali
 }
 
 
@@ -441,33 +488,22 @@ export class UserModule {}
 
 
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/userservicets ===
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './user.entity';
-
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
-
-    @Inject(CACHE_MANAGER)
-    private cacheManager: Cache,
+    private userRepository: Repository<User>,
   ) {}
 
-  async create(data: Partial<User>): Promise<User> {
-    try {
-      await this.cacheManager.del('all_users');
-      console.log('đź§ą Obrisan cache: all_users');
-    } catch (error) {
-      console.error('âš ď¸Ź GreĹˇka prilikom brisanja cache-a:', error.message);
-    }
-
-    const user = this.userRepository.create(data);
+  async create(createUserDto: CreateUserDto): Promise<User> {
+    const user = this.userRepository.create(createUserDto);
     return this.userRepository.save(user);
   }
 
@@ -480,39 +516,29 @@ export class UserService {
   }
 
   async findAll(): Promise<User[]> {
-    console.log('đź”Ť Pozvana je metoda findAll()');
+    return this.userRepository.find();
+  }
 
-    const cached = await this.cacheManager.get<User[]>('all_users');
-    if (cached) {
-      console.log('âś… VraÄ‡eno iz cache-a');
-      return cached;
-    }
-
-    const users = await this.userRepository.find();
-    await this.cacheManager.set('all_users', users, 60_000);
-
-    console.log('âś… VraÄ‡eno iz baze i spremljeno u cache');
-    return users;
+  async updateRefreshToken(id: number, refreshToken: string): Promise<void> {
+    await this.userRepository.update(id, { refreshToken });
   }
 }
 
 
 
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/dto/create-userdtots ===
-// Uvozimo dekoratore za validaciju iz biblioteke 'class-validator'
 import { IsEmail, IsNotEmpty, MinLength } from 'class-validator';
 
-// Definiramo DTO (Data Transfer Object) klasu za kreiranje novog korisnika
 export class CreateUserDto {
-  // Provjera da je email ispravno napisan (npr. test@mail.com)
   @IsEmail()
   email: string;
 
-  // Provjera da polje nije prazno (ne smije biti undefined, null ili prazan string)
   @IsNotEmpty()
-  // Lozinka mora imati minimalnu duljinu od 6 znakova
   @MinLength(6)
   password: string;
+
+  @IsNotEmpty()
+  role: string; // âś… Dodaj ovo
 }
 
 

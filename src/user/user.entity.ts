@@ -12,6 +12,8 @@ export class User {
   password: string;
 
   @Column({ type: 'text', nullable: true }) // Omogućujemo null vrijednost
-refreshToken: string | null;
+  refreshToken: string | null;
 
+  @Column()
+  role: string; // ✅ Dodano polje koje fali
 }
