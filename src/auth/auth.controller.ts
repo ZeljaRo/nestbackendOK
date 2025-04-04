@@ -16,7 +16,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  register(@Body() body: { email: string; password: string }) {
+  register(@Body() body: { email: string; password: string; role: string }) {
     return this.authService.register(body);
   }
 
@@ -25,10 +25,21 @@ export class AuthController {
     return this.authService.login(body);
   }
 
+  @Post('refresh')
+  refresh(@Body() body: { userId: number; refreshToken: string }) {
+    return this.authService.refreshTokens(body.userId, body.refreshToken);
+  }
+
   @UseGuards(JwtAuthGuard)
-  @Get('profile')
-  getProfile(@Request() req) {
-    return req.user;
+  @Get('me')
+  getMe(@Request() req) {
+    return this.authService.getMe(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  logout(@Request() req) {
+    return this.authService.logout(req.user.id);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -38,10 +49,5 @@ export class AuthController {
     return {
       message: '✅ Dobrodošao, admin!',
     };
-  }
-
-  @Post('refresh')
-  refresh(@Body() body: { userId: number; refreshToken: string }) {
-    return this.authService.refreshTokens(body.userId, body.refreshToken);
   }
 }

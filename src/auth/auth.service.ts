@@ -1,7 +1,8 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcrypt';
 import { UserService } from '../user/user.service';
+import * as bcrypt from 'bcrypt';
+import { CreateUserDto } from '../user/dto/create-user.dto';
 
 @Injectable()
 export class AuthService {
@@ -10,47 +11,86 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  async register(data: { email: string; password: string }) {
-    const hashedPassword = await bcrypt.hash(data.password, 10);
+  // REGISTRACIJA
+  async register(createUserDto: CreateUserDto) {
+    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
+
     const user = await this.userService.create({
-      email: data.email,
+      ...createUserDto,
       password: hashedPassword,
     });
+
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
+
     return {
       message: 'User registered successfully',
-      user,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+      },
+      ...tokens,
     };
   }
 
+  // LOGIN
   async login(data: { email: string; password: string }) {
     const user = await this.userService.findByEmail(data.email);
-    if (!user) {
-      throw new UnauthorizedException('Korisnik ne postoji');
-    }
+    if (!user) throw new UnauthorizedException('Invalid credentials');
 
-    const isPasswordValid = await bcrypt.compare(data.password, user.password);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Neispravna lozinka');
-    }
+    const isMatch = await bcrypt.compare(data.password, user.password);
+    if (!isMatch) throw new UnauthorizedException('Invalid credentials');
 
-    const payload = { id: user.id, email: user.email, role: user.role };
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
-    const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
 
-    // ✅ Spremi refresh token u bazu
-    await this.userService.updateRefreshToken(user.id, refreshToken);
+    return tokens;
+  }
+
+  // GENERIRAJ TOKENE
+  async generateTokens(userId: number, email: string, role: string) {
+    const payload = { id: userId, email, role };
+
+    const accessToken = await this.jwtService.signAsync(payload, {
+      expiresIn: '1h',
+    });
+
+    const refreshToken = await this.jwtService.signAsync(payload, {
+      expiresIn: '7d',
+    });
 
     return { accessToken, refreshToken };
   }
 
+  // REFRESH TOKEN
   async refreshTokens(userId: number, refreshToken: string) {
     const user = await this.userService.findById(userId);
-    if (!user || user.refreshToken !== refreshToken) {
-      throw new UnauthorizedException('Invalid refresh token');
-    }
+    if (!user || !user.refreshToken)
+      throw new UnauthorizedException('User not found or no token saved');
 
-    const payload = { id: user.id, email: user.email, role: user.role };
-    const newAccessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
-    return { accessToken: newAccessToken };
+    const isMatch = refreshToken === user.refreshToken;
+    if (!isMatch) throw new UnauthorizedException('Invalid refresh token');
+
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
+
+    return tokens;
+  }
+
+  // GET ME
+  async getMe(user: any) {
+    return {
+      message: '✅ Podaci iz tokena',
+      user,
+    };
+  }
+
+  // LOGOUT
+  async logout(userId: number) {
+    await this.userService.removeRefreshToken(userId);
+    return {
+      message: '✅ Uspješno ste se odjavili',
+    };
   }
 }

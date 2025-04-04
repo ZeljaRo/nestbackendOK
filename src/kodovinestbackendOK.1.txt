@@ -55,7 +55,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  register(@Body() body: { email: string; password: string; role: string }) {
+  register(@Body() body: { email: string; password: string }) {
     return this.authService.register(body);
   }
 
@@ -64,21 +64,10 @@ export class AuthController {
     return this.authService.login(body);
   }
 
-  @Post('refresh')
-  refresh(@Body() body: { userId: number; refreshToken: string }) {
-    return this.authService.refreshTokens(body.userId, body.refreshToken);
-  }
-
   @UseGuards(JwtAuthGuard)
-  @Get('me')
-  getMe(@Request() req) {
-    return this.authService.getMe(req.user.id);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post('logout')
-  logout(@Request() req) {
-    return this.authService.logout(req.user.id);
+  @Get('profile')
+  getProfile(@Request() req) {
+    return req.user;
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -88,6 +77,11 @@ export class AuthController {
     return {
       message: 'âś… DobrodoĹˇao, admin!',
     };
+  }
+
+  @Post('refresh')
+  refresh(@Body() body: { userId: number; refreshToken: string }) {
+    return this.authService.refreshTokens(body.userId, body.refreshToken);
   }
 }
 
@@ -145,9 +139,8 @@ describe('AuthService', () => {
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/authservicets ===
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { UserService } from '../user/user.service';
 import * as bcrypt from 'bcrypt';
-import { CreateUserDto } from '../user/dto/create-user.dto';
+import { UserService } from '../user/user.service';
 
 @Injectable()
 export class AuthService {
@@ -156,87 +149,48 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  // REGISTRACIJA
-  async register(createUserDto: CreateUserDto) {
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
-
+  async register(data: { email: string; password: string }) {
+    const hashedPassword = await bcrypt.hash(data.password, 10);
     const user = await this.userService.create({
-      ...createUserDto,
+      email: data.email,
       password: hashedPassword,
     });
-
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
-
     return {
       message: 'User registered successfully',
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-      },
-      ...tokens,
-    };
-  }
-
-  // LOGIN
-  async login(data: { email: string; password: string }) {
-    const user = await this.userService.findByEmail(data.email);
-    if (!user) throw new UnauthorizedException('Invalid credentials');
-
-    const isMatch = await bcrypt.compare(data.password, user.password);
-    if (!isMatch) throw new UnauthorizedException('Invalid credentials');
-
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
-
-    return tokens;
-  }
-
-  // GENERIRAJ TOKENE
-  async generateTokens(userId: number, email: string, role: string) {
-    const payload = { id: userId, email, role };
-
-    const accessToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '1h',
-    });
-
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '7d',
-    });
-
-    return { accessToken, refreshToken };
-  }
-
-  // REFRESH TOKEN
-  async refreshTokens(userId: number, refreshToken: string) {
-    const user = await this.userService.findById(userId);
-    if (!user || !user.refreshToken)
-      throw new UnauthorizedException('User not found or no token saved');
-
-    const isMatch = refreshToken === user.refreshToken;
-    if (!isMatch) throw new UnauthorizedException('Invalid refresh token');
-
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
-
-    return tokens;
-  }
-
-  // GET ME
-  async getMe(user: any) {
-    return {
-      message: 'âś… Podaci iz tokena',
       user,
     };
   }
 
-  // LOGOUT
-  async logout(userId: number) {
-    await this.userService.removeRefreshToken(userId);
-    return {
-      message: 'âś… UspjeĹˇno ste se odjavili',
-    };
+  async login(data: { email: string; password: string }) {
+    const user = await this.userService.findByEmail(data.email);
+    if (!user) {
+      throw new UnauthorizedException('Korisnik ne postoji');
+    }
+
+    const isPasswordValid = await bcrypt.compare(data.password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Neispravna lozinka');
+    }
+
+    const payload = { id: user.id, email: user.email, role: user.role };
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
+    const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
+
+    // âś… Spremi refresh token u bazu
+    await this.userService.updateRefreshToken(user.id, refreshToken);
+
+    return { accessToken, refreshToken };
+  }
+
+  async refreshTokens(userId: number, refreshToken: string) {
+    const user = await this.userService.findById(userId);
+    if (!user || user.refreshToken !== refreshToken) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const payload = { id: user.id, email: user.email, role: user.role };
+    const newAccessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
+    return { accessToken: newAccessToken };
   }
 }
 
@@ -509,7 +463,6 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './user.entity';
-import { CreateUserDto } from './dto/create-user.dto';
 
 @Injectable()
 export class UserService {
@@ -518,35 +471,25 @@ export class UserService {
     private readonly userRepository: Repository<User>,
   ) {}
 
-  // STVARANJE NOVOG KORISNIKA
-  async create(data: CreateUserDto): Promise<User> {
+  async create(data: { email: string; password: string }) {
     const user = this.userRepository.create(data);
     return this.userRepository.save(user);
   }
 
-  // PRONALAĹ˝ENJE PO EMAILU
-  async findByEmail(email: string): Promise<User | null> {
+  async findByEmail(email: string) {
     return this.userRepository.findOne({ where: { email } });
   }
 
-  // PRONALAĹ˝ENJE PO ID
-  async findById(id: number): Promise<User | null> {
+  async findById(id: number) {
     return this.userRepository.findOne({ where: { id } });
   }
 
-  // SVI KORISNICI
-  async findAll(): Promise<User[]> {
+  async findAll() {
     return this.userRepository.find();
   }
 
-  // AĹ˝URIRANJE REFRESH TOKENA
-  async updateRefreshToken(userId: number, refreshToken: string): Promise<void> {
-    await this.userRepository.update(userId, { refreshToken });
-  }
-
-  // UKLANJANJE REFRESH TOKENA
-  async removeRefreshToken(userId: number): Promise<void> {
-    await this.userRepository.update(userId, { refreshToken: null });
+  async updateRefreshToken(id: number, refreshToken: string) {
+    await this.userRepository.update(id, { refreshToken });
   }
 }
 
@@ -564,7 +507,7 @@ export class CreateUserDto {
   password: string;
 
   @IsNotEmpty()
-  role: string; // primjerice: "user" ili "admin"
+  role: string; // âś… Dodaj ovo
 }
 
 

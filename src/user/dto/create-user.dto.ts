@@ -9,5 +9,5 @@ export class CreateUserDto {
   password: string;
 
   @IsNotEmpty()
-  role: string; // ✅ Dodaj ovo
+  role: string; // primjerice: "user" ili "admin"
 }
