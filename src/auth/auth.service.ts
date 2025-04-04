@@ -1,8 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { UserService } from '../user/user.service';
 import * as bcrypt from 'bcrypt';
-import { CreateUserDto } from '../user/dto/create-user.dto';
+import { UserService } from '../user/user.service';
 
 @Injectable()
 export class AuthService {
@@ -11,86 +10,76 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  // REGISTRACIJA
-  async register(createUserDto: CreateUserDto) {
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
-
+  async register(data: { email: string; password: string; role: string }) {
+    const hashedPassword = await bcrypt.hash(data.password, 10);
     const user = await this.userService.create({
-      ...createUserDto,
+      ...data,
       password: hashedPassword,
     });
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
-
     return {
       message: 'User registered successfully',
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-      },
-      ...tokens,
+      user,
     };
   }
 
-  // LOGIN
   async login(data: { email: string; password: string }) {
     const user = await this.userService.findByEmail(data.email);
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
-    const isMatch = await bcrypt.compare(data.password, user.password);
-    if (!isMatch) throw new UnauthorizedException('Invalid credentials');
+    const passwordMatch = await bcrypt.compare(data.password, user.password);
+    if (!passwordMatch) throw new UnauthorizedException('Invalid credentials');
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
+    const payload = { id: user.id, email: user.email, role: user.role };
 
-    return tokens;
-  }
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
+    const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
 
-  // GENERIRAJ TOKENE
-  async generateTokens(userId: number, email: string, role: string) {
-    const payload = { id: userId, email, role };
-
-    const accessToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '1h',
-    });
-
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '7d',
-    });
+    await this.userService.updateRefreshToken(user.id, refreshToken);
 
     return { accessToken, refreshToken };
   }
 
-  // REFRESH TOKEN
   async refreshTokens(userId: number, refreshToken: string) {
     const user = await this.userService.findById(userId);
-    if (!user || !user.refreshToken)
-      throw new UnauthorizedException('User not found or no token saved');
+    if (!user || user.refreshToken !== refreshToken) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
 
-    const isMatch = refreshToken === user.refreshToken;
-    if (!isMatch) throw new UnauthorizedException('Invalid refresh token');
+    const payload = { id: user.id, email: user.email, role: user.role };
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
+    const newAccessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
+    const newRefreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
 
-    return tokens;
+    await this.userService.updateRefreshToken(user.id, newRefreshToken);
+
+    return { accessToken: newAccessToken, refreshToken: newRefreshToken };
   }
 
-  // GET ME
-  async getMe(user: any) {
+  async getMe(userId: number) {
+    const user = await this.userService.findById(userId);
     return {
       message: '✅ Podaci iz tokena',
       user,
     };
   }
 
-  // LOGOUT
   async logout(userId: number) {
     await this.userService.removeRefreshToken(userId);
-    return {
-      message: '✅ Uspješno ste se odjavili',
-    };
+    return { message: '✅ Uspješno ste se odjavili' };
+  }
+
+  async changePassword(userId: number, oldPassword: string, newPassword: string) {
+    const user = await this.userService.findById(userId);
+    if (!user) throw new UnauthorizedException('Korisnik nije pronađen');
+
+    const isOldPasswordValid = await bcrypt.compare(oldPassword, user.password);
+    if (!isOldPasswordValid) throw new UnauthorizedException('Stara lozinka nije točna');
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedNewPassword;
+    await this.userService.save(user);
+
+    return { message: '✅ Lozinka uspješno promijenjena' };
   }
 }

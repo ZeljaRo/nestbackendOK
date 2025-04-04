@@ -11,34 +11,32 @@ export class UserService {
     private readonly userRepository: Repository<User>,
   ) {}
 
-  // STVARANJE NOVOG KORISNIKA
   async create(data: CreateUserDto): Promise<User> {
     const user = this.userRepository.create(data);
     return this.userRepository.save(user);
   }
 
-  // PRONALAŽENJE PO EMAILU
   async findByEmail(email: string): Promise<User | null> {
     return this.userRepository.findOne({ where: { email } });
   }
 
-  // PRONALAŽENJE PO ID
   async findById(id: number): Promise<User | null> {
     return this.userRepository.findOne({ where: { id } });
   }
 
-  // SVI KORISNICI
   async findAll(): Promise<User[]> {
     return this.userRepository.find();
   }
 
-  // AŽURIRANJE REFRESH TOKENA
   async updateRefreshToken(userId: number, refreshToken: string): Promise<void> {
     await this.userRepository.update(userId, { refreshToken });
   }
 
-  // UKLANJANJE REFRESH TOKENA
   async removeRefreshToken(userId: number): Promise<void> {
     await this.userRepository.update(userId, { refreshToken: null });
+  }
+
+  async save(user: User): Promise<User> {
+    return this.userRepository.save(user);
   }
 }

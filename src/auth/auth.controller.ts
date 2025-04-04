@@ -10,6 +10,7 @@ import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { Roles } from './roles.decorator';
 import { RolesGuard } from './roles.guard';
+import { ChangePasswordDto } from '../user/dto/change-password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -49,5 +50,15 @@ export class AuthController {
     return {
       message: '✅ Dobrodošao, admin!',
     };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  changePassword(@Request() req, @Body() body: ChangePasswordDto) {
+    return this.authService.changePassword(
+      req.user.id,
+      body.oldPassword,
+      body.newPassword,
+    );
   }
 }
