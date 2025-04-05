@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { User } from './user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UserService {
@@ -11,44 +13,39 @@ export class UserService {
     private readonly userRepository: Repository<User>,
   ) {}
 
-  // STVARANJE NOVOG KORISNIKA
-  async create(data: CreateUserDto): Promise<User> {
-    const user = this.userRepository.create(data);
-    return this.userRepository.save(user);
-  }
-
-  // PRONALAŽENJE PO EMAILU
-  async findByEmail(email: string): Promise<User | null> {
-    return this.userRepository.findOne({ where: { email } });
-  }
-
-  // PRONALAŽENJE PO ID
-  async findById(id: number): Promise<User | null> {
-    return this.userRepository.findOne({ where: { id } });
-  }
-
-  // SVI KORISNICI
   async findAll(): Promise<User[]> {
     return this.userRepository.find();
   }
 
-  // AŽURIRANJE REFRESH TOKENA
-  async updateRefreshToken(userId: number, refreshToken: string): Promise<void> {
-    await this.userRepository.update(userId, { refreshToken });
+  async findOne(id: number): Promise<User | null> {
+    return this.userRepository.findOne({ where: { id } });
   }
 
-  // UKLANJANJE REFRESH TOKENA
-  async removeRefreshToken(userId: number): Promise<void> {
-    await this.userRepository.update(userId, { refreshToken: null });
+  async findByEmail(email: string): Promise<User | null> {
+    return this.userRepository.findOne({ where: { email } });
   }
 
-  // AŽURIRANJE LOZINKE
+  async create(createUserDto: CreateUserDto): Promise<User> {
+    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
+    const newUser = this.userRepository.create({
+      ...createUserDto,
+      password: hashedPassword,
+    });
+    return this.userRepository.save(newUser);
+  }
+
+  async update(id: number, updateUserDto: UpdateUserDto): Promise<User| null> {
+    await this.userRepository.update(id, updateUserDto);
+    return this.findOne(id);
+  }
+
   async updatePassword(userId: number, newPassword: string): Promise<void> {
-    await this.userRepository.update(userId, { password: newPassword });
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await this.userRepository.update(userId, { password: hashed });
   }
 
-  // SPREMANJE PROMJENA NA KORISNIKU
-  async saveUser(user: User): Promise<User> {
-    return this.userRepository.save(user);
+  // ✅ Dodano: spremanje ili poništavanje reset tokena
+  async saveResetToken(userId: number, token: string | null): Promise<void> {
+    await this.userRepository.update(userId, { refreshToken: token });
   }
 }

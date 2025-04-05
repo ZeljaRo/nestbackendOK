@@ -7,32 +7,29 @@ import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../user/user.entity';
 import { UserService } from '../user/user.service';
-import { JwtAuthGuard } from './jwt-auth.guard';
 import { RolesGuard } from './roles.guard';
-import { ForgotPasswordController } from './forgot-password.controller';
 import { ForgotResetController } from './forgot-reset.controller';
-import { ForgotPasswordService } from '../user/forgot-password.service';
-import { ResetPasswordService } from '../user/reset-password.service';
+import { ForgotPasswordDto } from '../user/dto/forgot-password.dto';
+import { ResetPasswordDto } from '../user/dto/reset-password.dto';
+import { MailService } from '../mail/mail.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User]),
     PassportModule,
-    JwtModule.register({}), // ⬅️ neophodno za JwtService
+    JwtModule.register({}), // konfiguracija JWT-a
   ],
   controllers: [
     AuthController,
-    ForgotPasswordController,
-    ForgotResetController,
+    ForgotResetController, // ✅ samo ovaj controller koristimo za reset
   ],
   providers: [
     AuthService,
     UserService,
     JwtStrategy,
     RolesGuard,
-    ForgotPasswordService,
-    ResetPasswordService,
+    MailService, // ✅ dummy email servis
   ],
-  exports: [JwtModule], // ⬅️ omogućuje drugim modulima da koriste JwtService
+  exports: [JwtModule], // omogućuje drugim modulima pristup JwtService
 })
 export class AuthModule {}

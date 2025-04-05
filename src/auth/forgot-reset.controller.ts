@@ -1,28 +1,58 @@
-import { Controller, Post, Body } from '@nestjs/common';
-import { ResetPasswordService } from '../user/reset-password.service';
-import { ForgotPasswordService } from '../user/forgot-password.service';
+import { Body, Controller, Post } from '@nestjs/common';
+import { UserService } from '../user/user.service';
+import { JwtService } from '@nestjs/jwt';
 import { ForgotPasswordDto } from '../user/dto/forgot-password.dto';
 import { ResetPasswordDto } from '../user/dto/reset-password.dto';
+import { MailService } from '../mail/mail.service';
 
 @Controller('auth')
 export class ForgotResetController {
   constructor(
-    private readonly resetPasswordService: ResetPasswordService,
-    private readonly forgotPasswordService: ForgotPasswordService,
+    private readonly userService: UserService,
+    private readonly jwtService: JwtService,
+    private readonly mailService: MailService, // ✅ Dodano za slanje "emaila"
   ) {}
 
   @Post('forgot-reset-password')
-  async forgot(@Body() body: ForgotPasswordDto) {
-    const { email } = body;
-    const token = await this.resetPasswordService.createTokenForUser(email);
-    await this.forgotPasswordService.saveResetToken(email, token);
-    return { message: '✅ Token za reset lozinke je generiran i spremljen' };
+  async forgotResetPassword(@Body() forgotDto: ForgotPasswordDto) {
+    const { email } = forgotDto;
+
+    const user = await this.userService.findByEmail(email);
+    if (!user) {
+      return { message: '❌ Korisnik s ovim emailom ne postoji' };
+    }
+
+    const token = this.jwtService.sign(
+      { email: user.email },
+      { secret: 'tajniResetKljuc', expiresIn: '15m' }, // Token vrijedi 15 minuta
+    );
+
+    await this.userService.saveResetToken(user.id, token);
+
+    // ✅ Dummy "slanje" emaila
+    this.mailService.sendResetEmail(email, token);
+
+    return { message: '✅ Token za reset lozinke je generiran i poslan e-mailom' };
   }
 
   @Post('reset')
-  async reset(@Body() body: ResetPasswordDto) {
-    const { token, newPassword } = body;
-    await this.resetPasswordService.resetPassword(token, newPassword);
-    return { message: '✅ Lozinka je uspješno resetirana' };
+  async resetPassword(@Body() resetDto: ResetPasswordDto) {
+    const { token, newPassword } = resetDto;
+
+    try {
+      const payload = this.jwtService.verify(token, { secret: 'tajniResetKljuc' });
+      const user = await this.userService.findByEmail(payload.email);
+
+      if (!user || user.refreshToken !== token) {
+        return { message: '❌ Token nije valjan ili je već iskorišten' };
+      }
+
+      await this.userService.updatePassword(user.id, newPassword);
+      await this.userService.saveResetToken(user.id, null); // poništi token
+
+      return { message: '✅ Lozinka je uspješno resetirana' };
+    } catch (error) {
+      return { message: '❌ Token je istekao ili nije valjan' };
+    }
   }
 }
