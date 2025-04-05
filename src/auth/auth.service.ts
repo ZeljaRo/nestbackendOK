@@ -78,7 +78,7 @@ export class AuthService {
 
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedNewPassword;
-    await this.userService.save(user);
+    await this.userService.saveUser(user); // ✅ KORISTIMO novu metodu
 
     return { message: '✅ Lozinka uspješno promijenjena' };
   }

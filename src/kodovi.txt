@@ -49,6 +49,7 @@ import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { Roles } from './roles.decorator';
 import { RolesGuard } from './roles.guard';
+import { ChangePasswordDto } from '../user/dto/change-password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -89,6 +90,16 @@ export class AuthController {
       message: 'âś… DobrodoĹˇao, admin!',
     };
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  changePassword(@Request() req, @Body() body: ChangePasswordDto) {
+    return this.authService.changePassword(
+      req.user.id,
+      body.oldPassword,
+      body.newPassword,
+    );
+  }
 }
 
 
@@ -98,23 +109,38 @@ import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtModule } from '@nestjs/jwt';
-import { PassportModule } from '@nestjs/passport';
-import { UserModule } from '../user/user.module';
 import { JwtStrategy } from './jwt.strategy';
+import { PassportModule } from '@nestjs/passport';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { User } from '../user/user.entity';
+import { UserService } from '../user/user.service';
+import { JwtAuthGuard } from './jwt-auth.guard';
+import { RolesGuard } from './roles.guard';
+import { ForgotPasswordController } from './forgot-password.controller';
+import { ForgotResetController } from './forgot-reset.controller';
+import { ForgotPasswordService } from '../user/forgot-password.service';
+import { ResetPasswordService } from '../user/reset-password.service';
 
 @Module({
   imports: [
-    UserModule,
+    TypeOrmModule.forFeature([User]),
     PassportModule,
-    JwtModule.register({
-      global:true,
-      secret: 'moj_tajni_kljuc',
-      signOptions: { expiresIn: '1h' },
-    }),
+    JwtModule.register({}), // â¬…ď¸Ź neophodno za JwtService
   ],
-  controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports: [AuthService, JwtModule], // âś… OVDJE dodajemo JwtModule u exports
+  controllers: [
+    AuthController,
+    ForgotPasswordController,
+    ForgotResetController,
+  ],
+  providers: [
+    AuthService,
+    UserService,
+    JwtStrategy,
+    RolesGuard,
+    ForgotPasswordService,
+    ResetPasswordService,
+  ],
+  exports: [JwtModule], // â¬…ď¸Ź omoguÄ‡uje drugim modulima da koriste JwtService
 })
 export class AuthModule {}
 
@@ -145,9 +171,8 @@ describe('AuthService', () => {
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/authservicets ===
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { UserService } from '../user/user.service';
 import * as bcrypt from 'bcrypt';
-import { CreateUserDto } from '../user/dto/create-user.dto';
+import { UserService } from '../user/user.service';
 
 @Injectable()
 export class AuthService {
@@ -156,118 +181,218 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  // REGISTRACIJA
-  async register(createUserDto: CreateUserDto) {
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
-
+  async register(data: { email: string; password: string; role: string }) {
+    const hashedPassword = await bcrypt.hash(data.password, 10);
     const user = await this.userService.create({
-      ...createUserDto,
+      ...data,
       password: hashedPassword,
     });
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
-
     return {
       message: 'User registered successfully',
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-      },
-      ...tokens,
+      user,
     };
   }
 
-  // LOGIN
   async login(data: { email: string; password: string }) {
     const user = await this.userService.findByEmail(data.email);
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
-    const isMatch = await bcrypt.compare(data.password, user.password);
-    if (!isMatch) throw new UnauthorizedException('Invalid credentials');
+    const passwordMatch = await bcrypt.compare(data.password, user.password);
+    if (!passwordMatch) throw new UnauthorizedException('Invalid credentials');
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
+    const payload = { id: user.id, email: user.email, role: user.role };
 
-    return tokens;
-  }
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
+    const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
 
-  // GENERIRAJ TOKENE
-  async generateTokens(userId: number, email: string, role: string) {
-    const payload = { id: userId, email, role };
-
-    const accessToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '1h',
-    });
-
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '7d',
-    });
+    await this.userService.updateRefreshToken(user.id, refreshToken);
 
     return { accessToken, refreshToken };
   }
 
-  // REFRESH TOKEN
   async refreshTokens(userId: number, refreshToken: string) {
     const user = await this.userService.findById(userId);
-    if (!user || !user.refreshToken)
-      throw new UnauthorizedException('User not found or no token saved');
+    if (!user || user.refreshToken !== refreshToken) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
 
-    const isMatch = refreshToken === user.refreshToken;
-    if (!isMatch) throw new UnauthorizedException('Invalid refresh token');
+    const payload = { id: user.id, email: user.email, role: user.role };
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.userService.updateRefreshToken(user.id, tokens.refreshToken);
+    const newAccessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
+    const newRefreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
 
-    return tokens;
+    await this.userService.updateRefreshToken(user.id, newRefreshToken);
+
+    return { accessToken: newAccessToken, refreshToken: newRefreshToken };
   }
 
-  // GET ME
-  async getMe(user: any) {
+  async getMe(userId: number) {
+    const user = await this.userService.findById(userId);
     return {
       message: 'âś… Podaci iz tokena',
       user,
     };
   }
 
-  // LOGOUT
   async logout(userId: number) {
     await this.userService.removeRefreshToken(userId);
+    return { message: 'âś… UspjeĹˇno ste se odjavili' };
+  }
+
+  async changePassword(userId: number, oldPassword: string, newPassword: string) {
+    const user = await this.userService.findById(userId);
+    if (!user) throw new UnauthorizedException('Korisnik nije pronaÄ‘en');
+
+    const isOldPasswordValid = await bcrypt.compare(oldPassword, user.password);
+    if (!isOldPasswordValid) throw new UnauthorizedException('Stara lozinka nije toÄŤna');
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedNewPassword;
+    await this.userService.saveUser(user); // âś… KORISTIMO novu metodu
+
+    return { message: 'âś… Lozinka uspjeĹˇno promijenjena' };
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/change-passwordcontrollerts ===
+import { Controller, Post, Body, UseGuards, Request } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './jwt-auth.guard';
+
+@Controller('auth')
+export class ChangePasswordController {
+  constructor(private readonly authService: AuthService) {}
+
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  async changePassword(
+    @Request() req,
+    @Body() body: { oldPassword: string; newPassword: string },
+  ) {
+    const userId = req.user.id;
+    return this.authService.changePassword(userId, body.oldPassword, body.newPassword);
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/forgot-passwordcontrollerts ===
+import { Controller, Post, Body } from '@nestjs/common';
+import { ForgotPasswordDto } from '../user/dto/forgot-password.dto';
+import { ForgotPasswordService } from '../user/forgot-password.service';
+import { JwtService } from '@nestjs/jwt';
+
+@Controller('auth')
+export class ForgotPasswordController {
+  constructor(
+    private readonly forgotPasswordService: ForgotPasswordService,
+    private readonly jwtService: JwtService,
+  ) {}
+
+  @Post('forgot-password')
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    // đź” Generiramo token koji traje 15 minuta
+    const token = this.jwtService.sign({ email: dto.email }, { expiresIn: '15m' });
+
+    // âś… Spremamo token u bazu (u tablicu korisnika)
+    await this.forgotPasswordService.saveResetToken(dto.email, token);
+
+    // đź“© Ovdje bi inaÄŤe iĹˇao email, ali za sada samo vraÄ‡amo token kao simulaciju
     return {
-      message: 'âś… UspjeĹˇno ste se odjavili',
+      message: 'âś… Token za resetiranje poslan (simulacija)',
+      token,
     };
   }
 }
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/jwt-authguardts ===
-import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/forgot-reset-passwordcontrollerts ===
+import { Controller, Post, Body } from '@nestjs/common';
+import { ForgotPasswordService } from '../user/forgot-password.service';
+import { ResetPasswordService } from '../user/reset-password.service';
+import { ResetPasswordDto } from '../user/dto/reset-password.dto';
 import { JwtService } from '@nestjs/jwt';
 
-@Injectable()
-export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly jwtService: JwtService) {}
+@Controller('auth')
+export class ForgotResetPasswordController {
+  constructor(
+    private readonly forgotPasswordService: ForgotPasswordService,
+    private readonly resetPasswordService: ResetPasswordService,
+    private readonly jwtService: JwtService,
+  ) {}
 
-  canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest();
-    const authHeader = request.headers.authorization;
+  @Post('forgot-reset-password')
+  async forgotResetPassword(@Body() body: ResetPasswordDto) {
+    const email = body.email;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Token nije poslan');
-    }
+    // âś… Generiramo reset token
+    const token = this.jwtService.sign({ email }, { expiresIn: '15m' });
 
-    const token = authHeader.split(' ')[1];
-    try {
-      const decoded = this.jwtService.verify(token);
-      request.user = decoded;
-      return true;
-    } catch (error) {
-      throw new UnauthorizedException('Neispravan token');
-    }
+    // âś… Spremamo token korisniku
+    await this.forgotPasswordService.saveResetToken(email, token);
+
+    return {
+      message: 'âś… Token za resetiranje lozinke generiran i spremljen (simulacija)',
+      token,
+    };
+  }
+
+  @Post('reset-password')
+  async resetPassword(@Body() body: { email: string; newPassword: string }) {
+    const email = body.email;
+
+    await this.resetPasswordService.resetPassword(email, body.newPassword);
+
+    return {
+      message: 'âś… Lozinka uspjeĹˇno resetirana',
+    };
   }
 }
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/forgot-resetcontrollerts ===
+import { Controller, Post, Body } from '@nestjs/common';
+import { ResetPasswordService } from '../user/reset-password.service';
+import { ForgotPasswordService } from '../user/forgot-password.service';
+import { ForgotPasswordDto } from '../user/dto/forgot-password.dto';
+import { ResetPasswordDto } from '../user/dto/reset-password.dto';
+
+@Controller('auth')
+export class ForgotResetController {
+  constructor(
+    private readonly resetPasswordService: ResetPasswordService,
+    private readonly forgotPasswordService: ForgotPasswordService,
+  ) {}
+
+  @Post('forgot-reset-password')
+  async forgot(@Body() body: ForgotPasswordDto) {
+    const { email } = body;
+    const token = await this.resetPasswordService.createTokenForUser(email);
+    await this.forgotPasswordService.saveResetToken(email, token);
+    return { message: 'âś… Token za reset lozinke je generiran i spremljen' };
+  }
+
+  @Post('reset')
+  async reset(@Body() body: ResetPasswordDto) {
+    const { token, newPassword } = body;
+    await this.resetPasswordService.resetPassword(token, newPassword);
+    return { message: 'âś… Lozinka je uspjeĹˇno resetirana' };
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/jwt-authguardts ===
+import { Injectable } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {}
 
 
 
@@ -420,6 +545,127 @@ export class AppModule {}
 
 
 
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/change-passwordservicets ===
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { User } from './user.entity';
+import * as bcrypt from 'bcrypt';
+
+@Injectable()
+export class ChangePasswordService {
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+  ) {}
+
+  async changePassword(userId: number, oldPassword: string, newPassword: string): Promise<{ message: string }> {
+    // đź” PronaÄ‘i korisnika po ID-u
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('Korisnik nije pronaÄ‘en');
+    }
+
+    // đź” Provjera stare lozinke
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      throw new UnauthorizedException('Stara lozinka nije toÄŤna');
+    }
+
+    // đź” Hashiranje nove lozinke
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+
+    // đź’ľ Spremanje nove lozinke
+    await this.userRepository.save(user);
+
+    return { message: 'âś… Lozinka je uspjeĹˇno promijenjena' };
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/forgot-passwordservicets ===
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { User } from './user.entity';
+import * as bcrypt from 'bcrypt';
+
+@Injectable()
+export class ForgotPasswordService {
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+  ) {}
+
+  async saveResetToken(email: string, token: string): Promise<void> {
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) {
+      throw new NotFoundException('Korisnik nije pronaÄ‘en');
+    }
+
+    user.refreshToken = token;
+    await this.userRepository.save(user);
+  }
+
+  async updatePasswordWithToken(token: string, newPassword: string): Promise<void> {
+    const user = await this.userRepository.findOne({ where: { refreshToken: token } });
+    if (!user) {
+      throw new NotFoundException('Token nije valjan');
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+    user.refreshToken = null; // Token se poniĹˇtava nakon koriĹˇtenja
+    await this.userRepository.save(user);
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/reset-passwordservicets ===
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { User } from './user.entity';
+import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
+
+@Injectable()
+export class ResetPasswordService {
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+  ) {}
+
+  async createTokenForUser(email: string): Promise<string> {
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) {
+      throw new NotFoundException('Korisnik nije pronaÄ‘en');
+    }
+
+    const token = randomBytes(32).toString('hex');
+    user.refreshToken = token;
+    await this.userRepository.save(user);
+    return token;
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const user = await this.userRepository.findOne({ where: { refreshToken: token } });
+    if (!user) {
+      throw new NotFoundException('Token nije pronaÄ‘en');
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+    user.refreshToken = null;
+    await this.userRepository.save(user);
+  }
+}
+
+
+
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/usercontrollerts ===
 import { Controller, Get, Param, UseGuards } from '@nestjs/common';
 import { UserService } from './user.service';
@@ -471,33 +717,20 @@ export class User {
 
 
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/usermodulets ===
-// Importiramo @Module dekorator koji definira da je ovo NestJS modul
 import { Module } from '@nestjs/common';
-
-// Importiramo TypeOrmModule kako bismo mogli koristiti repozitorij za User entitet
 import { TypeOrmModule } from '@nestjs/typeorm';
-
-// Importiramo servis koji sadrĹľi poslovnu logiku korisnika
 import { UserService } from './user.service';
-
-// Importiramo kontroler koji obraÄ‘uje HTTP zahtjeve za korisnike
 import { UserController } from './user.controller';
-
-// Importiramo entitet korisnika (predstavlja tablicu u bazi)
 import { User } from './user.entity';
+import { AuthModule } from '../auth/auth.module'; // â¬…ď¸Ź dodano
 
-// Deklariramo modul pomoÄ‡u @Module dekoratora
 @Module({
-  // imports sluĹľi za povezivanje s bazom pomoÄ‡u TypeORM repozitorija za entitet User
-  imports: [TypeOrmModule.forFeature([User])],
-
-  // controllers definira koji kontroleri su dio ovog modula (tu dolaze HTTP rute)
+  imports: [
+    TypeOrmModule.forFeature([User]),
+    AuthModule, // â¬…ď¸Ź dodano da se moĹľe koristiti JwtService (i guardovi ako treba)
+  ],
   controllers: [UserController],
-
-  // providers oznaÄŤava koji servisi su dostupni unutar modula
   providers: [UserService],
-
-  // exports omoguÄ‡uje da druge module mogu koristiti ovaj servis (npr. auth modul)
   exports: [UserService],
 })
 export class UserModule {}
@@ -548,6 +781,30 @@ export class UserService {
   async removeRefreshToken(userId: number): Promise<void> {
     await this.userRepository.update(userId, { refreshToken: null });
   }
+
+  // AĹ˝URIRANJE LOZINKE
+  async updatePassword(userId: number, newPassword: string): Promise<void> {
+    await this.userRepository.update(userId, { password: newPassword });
+  }
+
+  // SPREMANJE PROMJENA NA KORISNIKU
+  async saveUser(user: User): Promise<User> {
+    return this.userRepository.save(user);
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/dto/change-passworddtots ===
+import { IsNotEmpty, MinLength } from 'class-validator';
+
+export class ChangePasswordDto {
+  @IsNotEmpty()
+  oldPassword: string;
+
+  @IsNotEmpty()
+  @MinLength(6)
+  newPassword: string;
 }
 
 
@@ -565,6 +822,26 @@ export class CreateUserDto {
 
   @IsNotEmpty()
   role: string; // primjerice: "user" ili "admin"
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/dto/forgot-passworddtots ===
+import { IsEmail, IsNotEmpty } from 'class-validator';
+
+export class ForgotPasswordDto {
+  @IsEmail()
+  @IsNotEmpty()
+  email: string;
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/dto/reset-passworddtots ===
+export class ResetPasswordDto {
+  email: string;
+  token: string;
+  newPassword: string;
 }
 
 
