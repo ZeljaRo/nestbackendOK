@@ -105,42 +105,41 @@ export class AuthController {
 
 
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/authmodulets ===
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
-import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './jwt.strategy';
-import { PassportModule } from '@nestjs/passport';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { User } from '../user/user.entity';
-import { UserService } from '../user/user.service';
-import { JwtAuthGuard } from './jwt-auth.guard';
-import { RolesGuard } from './roles.guard';
-import { ForgotPasswordController } from './forgot-password.controller';
+
+import { UserModule } from '../user/user.module';
+import { MailModule } from '../mail/mail.module';
+import { TokenModule } from '../token/token.module'; // âś… Dodan ispravan import
+
 import { ForgotResetController } from './forgot-reset.controller';
-import { ForgotPasswordService } from '../user/forgot-password.service';
-import { ResetPasswordService } from '../user/reset-password.service';
+import { ChangePasswordController } from './change-password.controller';
+import { ThrottleGuard } from './throttle.guard';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User]),
-    PassportModule,
-    JwtModule.register({}), // â¬…ď¸Ź neophodno za JwtService
+    JwtModule.register({}),               // OmoguÄ‡uje rad s JWT tokenima
+    PassportModule,                       // Za autentifikaciju
+    forwardRef(() => UserModule),         // RjeĹˇava kruĹľne ovisnosti
+    MailModule,                           // MailService dostupnost
+    TokenModule,                          // âś… TokenService sada dostupan
   ],
   controllers: [
     AuthController,
-    ForgotPasswordController,
     ForgotResetController,
+    ChangePasswordController,
   ],
   providers: [
     AuthService,
-    UserService,
     JwtStrategy,
-    RolesGuard,
-    ForgotPasswordService,
-    ResetPasswordService,
+    ThrottleGuard,
   ],
-  exports: [JwtModule], // â¬…ď¸Ź omoguÄ‡uje drugim modulima da koriste JwtService
+  exports: [AuthService],
 })
 export class AuthModule {}
 
@@ -279,109 +278,72 @@ export class ChangePasswordController {
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/forgot-passwordcontrollerts ===
-import { Controller, Post, Body } from '@nestjs/common';
-import { ForgotPasswordDto } from '../user/dto/forgot-password.dto';
-import { ForgotPasswordService } from '../user/forgot-password.service';
-import { JwtService } from '@nestjs/jwt';
-
-@Controller('auth')
-export class ForgotPasswordController {
-  constructor(
-    private readonly forgotPasswordService: ForgotPasswordService,
-    private readonly jwtService: JwtService,
-  ) {}
-
-  @Post('forgot-password')
-  async forgotPassword(@Body() dto: ForgotPasswordDto) {
-    // đź” Generiramo token koji traje 15 minuta
-    const token = this.jwtService.sign({ email: dto.email }, { expiresIn: '15m' });
-
-    // âś… Spremamo token u bazu (u tablicu korisnika)
-    await this.forgotPasswordService.saveResetToken(dto.email, token);
-
-    // đź“© Ovdje bi inaÄŤe iĹˇao email, ali za sada samo vraÄ‡amo token kao simulaciju
-    return {
-      message: 'âś… Token za resetiranje poslan (simulacija)',
-      token,
-    };
-  }
-}
-
-
-
-=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/forgot-reset-passwordcontrollerts ===
-import { Controller, Post, Body } from '@nestjs/common';
-import { ForgotPasswordService } from '../user/forgot-password.service';
-import { ResetPasswordService } from '../user/reset-password.service';
-import { ResetPasswordDto } from '../user/dto/reset-password.dto';
-import { JwtService } from '@nestjs/jwt';
-
-@Controller('auth')
-export class ForgotResetPasswordController {
-  constructor(
-    private readonly forgotPasswordService: ForgotPasswordService,
-    private readonly resetPasswordService: ResetPasswordService,
-    private readonly jwtService: JwtService,
-  ) {}
-
-  @Post('forgot-reset-password')
-  async forgotResetPassword(@Body() body: ResetPasswordDto) {
-    const email = body.email;
-
-    // âś… Generiramo reset token
-    const token = this.jwtService.sign({ email }, { expiresIn: '15m' });
-
-    // âś… Spremamo token korisniku
-    await this.forgotPasswordService.saveResetToken(email, token);
-
-    return {
-      message: 'âś… Token za resetiranje lozinke generiran i spremljen (simulacija)',
-      token,
-    };
-  }
-
-  @Post('reset-password')
-  async resetPassword(@Body() body: { email: string; newPassword: string }) {
-    const email = body.email;
-
-    await this.resetPasswordService.resetPassword(email, body.newPassword);
-
-    return {
-      message: 'âś… Lozinka uspjeĹˇno resetirana',
-    };
-  }
-}
-
-
-
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/forgot-resetcontrollerts ===
-import { Controller, Post, Body } from '@nestjs/common';
-import { ResetPasswordService } from '../user/reset-password.service';
-import { ForgotPasswordService } from '../user/forgot-password.service';
+import { UseGuards } from '@nestjs/common';
+import { ThrottleGuard } from './throttle.guard';
+import { Body, Controller, Post } from '@nestjs/common';
+import { UserService } from '../user/user.service';
+import { JwtService } from '@nestjs/jwt';
 import { ForgotPasswordDto } from '../user/dto/forgot-password.dto';
 import { ResetPasswordDto } from '../user/dto/reset-password.dto';
+import { MailService } from '../mail/mail.service';
+import { TokenService } from '../token/token.service';
 
 @Controller('auth')
 export class ForgotResetController {
   constructor(
-    private readonly resetPasswordService: ResetPasswordService,
-    private readonly forgotPasswordService: ForgotPasswordService,
+    private readonly userService: UserService,
+    private readonly jwtService: JwtService,
+    private readonly mailService: MailService,
+    private readonly tokenService: TokenService,
   ) {}
 
   @Post('forgot-reset-password')
-  async forgot(@Body() body: ForgotPasswordDto) {
-    const { email } = body;
-    const token = await this.resetPasswordService.createTokenForUser(email);
-    await this.forgotPasswordService.saveResetToken(email, token);
-    return { message: 'âś… Token za reset lozinke je generiran i spremljen' };
+@UseGuards(ThrottleGuard)
+async forgotResetPassword(@Body() forgotDto: ForgotPasswordDto) {
+
+    const { email } = forgotDto;
+
+    const user = await this.userService.findByEmail(email);
+    if (!user) {
+      return { message: 'âťŚ Korisnik s ovim emailom ne postoji' };
+    }
+
+    const token = this.jwtService.sign(
+      { email: user.email },
+      { secret: 'tajniResetKljuc', expiresIn: '1s' },
+    );
+
+    await this.userService.saveResetToken(user.email, token);
+    this.mailService.sendResetEmail(email, token);
+
+    return { message: 'âś… Token za reset lozinke je generiran i poslan e-mailom' };
   }
 
   @Post('reset')
-  async reset(@Body() body: ResetPasswordDto) {
-    const { token, newPassword } = body;
-    await this.resetPasswordService.resetPassword(token, newPassword);
-    return { message: 'âś… Lozinka je uspjeĹˇno resetirana' };
+  async resetPassword(@Body() resetDto: ResetPasswordDto) {
+    const { token, newPassword } = resetDto;
+
+    // âŹł Provjera je li token istekao
+    if (this.tokenService.isExpired(token)) {
+      return { message: 'âťŚ Token je istekao' };
+    }
+
+    try {
+      const payload = this.jwtService.verify(token, { secret: 'tajniResetKljuc' });
+      const user = await this.userService.findByEmail(payload.email);
+
+      if (!user || user.refreshToken !== token) {
+        return { message: 'âťŚ Token nije valjan ili je veÄ‡ iskoriĹˇten' };
+      }
+
+      await this.userService.updatePassword(user.email, newPassword);
+      await this.userService.saveResetToken(user.email, null);
+
+      return { message: 'âś… Lozinka je uspjeĹˇno resetirana' };
+    } catch (error) {
+      return { message: 'âťŚ Token je neispravan' };
+    }
   }
 }
 
@@ -473,6 +435,92 @@ import {
   
 
 
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/throttleguardts ===
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
+
+// Memorijsko praÄ‡enje pokuĹˇaja
+const attemptsMap = new Map<string, { count: number; lastAttempt: number }>();
+
+@Injectable()
+export class ThrottleGuard implements CanActivate {
+  private readonly timeWindow = 60 * 1000; // 60 sekundi
+  private readonly maxAttempts = 3; // Maksimalno 3 pokuĹˇaja
+
+  canActivate(context: ExecutionContext): boolean {
+    const request = context.switchToHttp().getRequest();
+    const email = request.body?.email;
+
+    if (!email) {
+      throw new HttpException(
+        'âš ď¸Ź E-mail nije poslan u zahtjevu',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const now = Date.now();
+    const record = attemptsMap.get(email);
+
+    if (!record) {
+      // Prvi pokuĹˇaj
+      attemptsMap.set(email, { count: 1, lastAttempt: now });
+      return true;
+    }
+
+    const timePassed = now - record.lastAttempt;
+
+    if (timePassed > this.timeWindow) {
+      // Reset pokuĹˇaja nakon proteka vremena
+      attemptsMap.set(email, { count: 1, lastAttempt: now });
+      return true;
+    }
+
+    if (record.count >= this.maxAttempts) {
+      throw new HttpException(
+        'đźš« PreviĹˇe pokuĹˇaja â€“ pokuĹˇajte kasnije',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    // PoveÄ‡aj broj pokuĹˇaja
+    record.count += 1;
+    record.lastAttempt = now;
+    attemptsMap.set(email, record);
+
+    return true;
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/auth/tokenservicets ===
+import { Injectable } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+
+@Injectable()
+export class TokenService {
+  constructor(private readonly jwtService: JwtService) {}
+
+  generateToken(payload: any, expiresIn: string = '15m'): string {
+    return this.jwtService.sign(payload, { expiresIn });
+  }
+
+  verifyToken(token: string): any {
+    try {
+      return this.jwtService.verify(token);
+    } catch (error) {
+      return null;
+    }
+  }
+}
+
+
+
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/config/databaseconfigts ===
 import { DataSourceOptions } from 'typeorm';
 
@@ -501,23 +549,54 @@ export default registerAs('redis', () => ({
 
 
 
-=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/modules/appmodulets ===
-// Uvozimo osnovne NestJS module
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/mail/mailmodulets ===
 import { Module } from '@nestjs/common';
+import { MailService } from './mail.service';
 
-// Uvozimo TypeORM i naĹˇu konfiguraciju baze
+@Module({
+  providers: [MailService],
+  exports: [MailService],
+})
+export class MailModule {}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/mail/mailservicets ===
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class MailService {
+  /**
+   * Dummy metoda za slanje reset linka putem e-maila.
+   * Umjesto stvarnog slanja, ispisuje poruku u konzolu.
+   * 
+   * @param email - Email korisnika kojem se Ĺˇalje reset link
+   * @param token - Token za resetiranje lozinke
+   */
+  sendResetEmail(email: string, token: string): void {
+    // Ovo bi u stvarnom svijetu bio link koji korisnik otvori
+    const resetLink = `http://localhost:3000/reset?token=${token}`;
+
+    // Dummy output u konzolu â€“ simulacija slanja emaila
+    console.log(`âś… [DUMMY EMAIL] Reset lozinke poslan na: ${email}`);
+    console.log(`đź”— Reset link: ${resetLink}`);
+  }
+}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/modules/appmodulets ===
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseConfig } from '../config/database.config';
 
-// Uvozimo naĹˇa dva modula
-import { UserModule } from '../user/user.module';
-import { AuthModule } from '../auth/auth.module';
-
-// Uvozimo CacheModule i registraciju za Redis cache
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-ioredis-yet';
 
-// Deklariramo AppModule
+import { JwtModule } from '@nestjs/jwt';
+import { UserModule } from '../user/user.module';
+import { AuthModule } from '../auth/auth.module';
+
 @Module({
   imports: [
     // Povezivanje s PostgreSQL bazom
@@ -533,15 +612,64 @@ import { redisStore } from 'cache-manager-ioredis-yet';
           },
         }),
       }),
-      isGlobal: true,  // Cache dostupna globalno u cijeloj aplikaciji
+      isGlobal: true, // globalna dostupnost
     }),
 
-    // UkljuÄŤivanje ostalih modula
+    // JWT dostupan svugdje gdje treba (npr. TokenService)
+    JwtModule.register({}), // â¬… potrebno za TokenService i reset lozinke
+
+    // Glavni moduli
     UserModule,
     AuthModule,
   ],
 })
 export class AppModule {}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/token/tokenmodulets ===
+import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { TokenService } from './token.service';
+
+@Module({
+  imports: [JwtModule.register({})], // âś… Dodajemo JwtModule da se moĹľe injectati
+  providers: [TokenService],
+  exports: [TokenService],
+})
+export class TokenModule {}
+
+
+
+=== C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/token/tokenservicets ===
+import { Injectable } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+
+@Injectable()
+export class TokenService {
+  constructor(private readonly jwtService: JwtService) {}
+
+  /**
+   * Provjerava je li token istekao na temelju vremena unutar JWT payloada.
+   * @param token JWT token koji treba provjeriti
+   * @returns true ako je token istekao, inaÄŤe false
+   */
+  isExpired(token: string): boolean {
+    try {
+      // Decode bez provjere potpisa â€“ ÄŤitamo samo payload
+      const decoded: any = this.jwtService.decode(token);
+
+      if (!decoded || !decoded.exp) {
+        return true; // ako nema exp uopÄ‡e, smatramo da je neispravan
+      }
+
+      const currentTime = Math.floor(Date.now() / 1000); // trenutno vrijeme u sekundama
+      return decoded.exp < currentTime;
+    } catch (error) {
+      return true; // ako ne moĹľe dekodirati, smatramo da je token nevaĹľeÄ‡i
+    }
+  }
+}
 
 
 
@@ -717,21 +845,21 @@ export class User {
 
 
 === C:/Users/Korisnik/Documents/Projekti/nestbackendOK/src/user/usermodulets ===
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { UserService } from './user.service';
-import { UserController } from './user.controller';
 import { User } from './user.entity';
-import { AuthModule } from '../auth/auth.module'; // â¬…ď¸Ź dodano
+import { UserController } from './user.controller';
+import { UserService } from './user.service';
+import { AuthModule } from '../auth/auth.module'; // âš ď¸Ź koristi se u user.service?
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User]),
-    AuthModule, // â¬…ď¸Ź dodano da se moĹľe koristiti JwtService (i guardovi ako treba)
+    forwardRef(() => AuthModule), // âś… circular dependency ako koristiĹˇ auth unutar user
   ],
   controllers: [UserController],
   providers: [UserService],
-  exports: [UserService],
+  exports: [UserService], // âś… obavezno ako koristiĹˇ iz auth.service
 })
 export class UserModule {}
 
@@ -742,7 +870,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './user.entity';
-import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UserService {
@@ -751,46 +879,56 @@ export class UserService {
     private readonly userRepository: Repository<User>,
   ) {}
 
-  // STVARANJE NOVOG KORISNIKA
-  async create(data: CreateUserDto): Promise<User> {
-    const user = this.userRepository.create(data);
-    return this.userRepository.save(user);
+  // Dohvati sve korisnike
+  findAll(): Promise<User[]> {
+    return this.userRepository.find();
   }
 
-  // PRONALAĹ˝ENJE PO EMAILU
-  async findByEmail(email: string): Promise<User | null> {
-    return this.userRepository.findOne({ where: { email } });
-  }
-
-  // PRONALAĹ˝ENJE PO ID
+  // Dohvati korisnika po ID-u
   async findById(id: number): Promise<User | null> {
     return this.userRepository.findOne({ where: { id } });
   }
 
-  // SVI KORISNICI
-  async findAll(): Promise<User[]> {
-    return this.userRepository.find();
+  // Dohvati korisnika po e-mail adresi
+  async findByEmail(email: string): Promise<User | null> {
+    return this.userRepository.findOne({ where: { email } });
   }
 
-  // AĹ˝URIRANJE REFRESH TOKENA
+  // AĹľuriraj korisnika
+  async update(id: number, updateUserDto: UpdateUserDto): Promise<User> {
+    await this.userRepository.update(id, updateUserDto);
+    return (await this.findById(id)) as User;
+  }
+
+  // AĹľuriraj refresh token
   async updateRefreshToken(userId: number, refreshToken: string): Promise<void> {
     await this.userRepository.update(userId, { refreshToken });
   }
 
-  // UKLANJANJE REFRESH TOKENA
+  // Ukloni refresh token (logout)
   async removeRefreshToken(userId: number): Promise<void> {
     await this.userRepository.update(userId, { refreshToken: null });
   }
 
-  // AĹ˝URIRANJE LOZINKE
-  async updatePassword(userId: number, newPassword: string): Promise<void> {
-    await this.userRepository.update(userId, { password: newPassword });
-  }
-
-  // SPREMANJE PROMJENA NA KORISNIKU
+  // Spremi korisnika (npr. s validiranim tokenom)
   async saveUser(user: User): Promise<User> {
     return this.userRepository.save(user);
   }
+
+  // Spremi reset token (u refreshToken polje)
+  async saveResetToken(email: string, token: string | null): Promise<void> {
+    await this.userRepository.update({ email }, { refreshToken: token });
+  }
+
+  // AĹľuriraj lozinku korisniku
+  async updatePassword(email: string, hashedPassword: string): Promise<void> {
+    await this.userRepository.update({ email }, { password: hashedPassword });
+  }
+// Stvori novog korisnika
+async create(data: Partial<User>): Promise<User> {
+  const user = this.userRepository.create(data);
+  return this.userRepository.save(user);
+}
 }
 
 

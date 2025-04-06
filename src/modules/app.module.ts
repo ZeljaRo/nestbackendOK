@@ -1,19 +1,14 @@
-// Uvozimo osnovne NestJS module
 import { Module } from '@nestjs/common';
-
-// Uvozimo TypeORM i našu konfiguraciju baze
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseConfig } from '../config/database.config';
 
-// Uvozimo naša dva modula
-import { UserModule } from '../user/user.module';
-import { AuthModule } from '../auth/auth.module';
-
-// Uvozimo CacheModule i registraciju za Redis cache
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-ioredis-yet';
 
-// Deklariramo AppModule
+import { JwtModule } from '@nestjs/jwt';
+import { UserModule } from '../user/user.module';
+import { AuthModule } from '../auth/auth.module';
+
 @Module({
   imports: [
     // Povezivanje s PostgreSQL bazom
@@ -29,10 +24,13 @@ import { redisStore } from 'cache-manager-ioredis-yet';
           },
         }),
       }),
-      isGlobal: true,  // Cache dostupna globalno u cijeloj aplikaciji
+      isGlobal: true, // globalna dostupnost
     }),
 
-    // Uključivanje ostalih modula
+    // JWT dostupan svugdje gdje treba (npr. TokenService)
+    JwtModule.register({}), // ⬅ potrebno za TokenService i reset lozinke
+
+    // Glavni moduli
     UserModule,
     AuthModule,
   ],

@@ -1,35 +1,37 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
-import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './jwt.strategy';
-import { PassportModule } from '@nestjs/passport';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { User } from '../user/user.entity';
-import { UserService } from '../user/user.service';
-import { RolesGuard } from './roles.guard';
+
+import { UserModule } from '../user/user.module';
+import { MailModule } from '../mail/mail.module';
+import { TokenModule } from '../token/token.module'; // ✅ Dodan ispravan import
+
 import { ForgotResetController } from './forgot-reset.controller';
-import { ForgotPasswordDto } from '../user/dto/forgot-password.dto';
-import { ResetPasswordDto } from '../user/dto/reset-password.dto';
-import { MailService } from '../mail/mail.service';
+import { ChangePasswordController } from './change-password.controller';
+import { ThrottleGuard } from './throttle.guard';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User]),
-    PassportModule,
-    JwtModule.register({}), // konfiguracija JWT-a
+    JwtModule.register({}),               // Omogućuje rad s JWT tokenima
+    PassportModule,                       // Za autentifikaciju
+    forwardRef(() => UserModule),         // Rješava kružne ovisnosti
+    MailModule,                           // MailService dostupnost
+    TokenModule,                          // ✅ TokenService sada dostupan
   ],
   controllers: [
     AuthController,
-    ForgotResetController, // ✅ samo ovaj controller koristimo za reset
+    ForgotResetController,
+    ChangePasswordController,
   ],
   providers: [
     AuthService,
-    UserService,
     JwtStrategy,
-    RolesGuard,
-    MailService, // ✅ dummy email servis
+    ThrottleGuard,
   ],
-  exports: [JwtModule], // omogućuje drugim modulima pristup JwtService
+  exports: [AuthService],
 })
 export class AuthModule {}

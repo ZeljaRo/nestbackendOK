@@ -1,17 +1,17 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { UserService } from './user.service';
-import { UserController } from './user.controller';
 import { User } from './user.entity';
-import { AuthModule } from '../auth/auth.module'; // ⬅️ dodano
+import { UserController } from './user.controller';
+import { UserService } from './user.service';
+import { AuthModule } from '../auth/auth.module'; // ⚠️ koristi se u user.service?
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User]),
-    AuthModule, // ⬅️ dodano da se može koristiti JwtService (i guardovi ako treba)
+    forwardRef(() => AuthModule), // ✅ circular dependency ako koristiš auth unutar user
   ],
   controllers: [UserController],
   providers: [UserService],
-  exports: [UserService],
+  exports: [UserService], // ✅ obavezno ako koristiš iz auth.service
 })
 export class UserModule {}
